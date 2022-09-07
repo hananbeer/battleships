@@ -25,8 +25,8 @@ contract Battleships {
         Started,  // both players started game
         Ended,    // first player to report loss
         Attested, // winner attested their board
-        Slashed,  // afk player slashed
-        Faulted,  // player proved fault
+        Slashed,  // afk player slashed, game is sealed and no further actions can be taken
+        Faulted,  // player proved fault, game is sealed and no further actions can be taken
         Claimed   // winner claimed funds, game is sealed and no further actions can be taken
     }
 
@@ -167,6 +167,8 @@ contract Battleships {
         require(player_last_update_block < opponent_last_update_block, "not your turn");
         require(opponent_last_update_block - player_last_update_block < MAX_BLOCKS_HIGH_AND_DRY, "stale game");
 
+        player.last_update_block = block.number;
+
         // opponent_ack is player acknowledgment of player missile
         // at the end of the game proofs should be published
         if (opponent_ack) {
@@ -185,7 +187,6 @@ contract Battleships {
         }
 
         player.missiles.push(coord);
-        player.last_update_block = block.number;
     }
 
     event EndGame(uint256 indexed game_id, address player, uint8[] coords);
@@ -194,11 +195,11 @@ contract Battleships {
     function _end(uint8[] memory coords) internal {
         Game storage game = _game();
         require(game.state == GameState.Started, "invalid end state");
-        game.state = GameState.Ended;
 
+        console.log('GAME ENDED: unproved loser = %s', msg.sender);
         // not attempting to prove loser; forging loss will be treated as forfeit
         emit EndGame(game.id, msg.sender, coords);
-        console.log('GAME ENDED: unproved loser = %s', msg.sender);
+        game.state = GameState.Ended;
     }
     
     function attest(uint8[] calldata coords, uint32 salt) public {
@@ -215,10 +216,11 @@ contract Battleships {
         require(game.state == GameState.Attested, "invalid fault state");
         // loosely-related check of whether caller is fault maker (attester) or fault prover
         require(_player().acks.length == MAX_SHIP_CELLS, "not attester");
-        game.state = GameState.Faulted;
 
         // TODO: prove fault here
         console.log("fault proved by: %s", msg.sender);
+
+        game.state = GameState.Faulted;
         //revert("unimplemented");
     }
 
@@ -228,24 +230,30 @@ contract Battleships {
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Attested, "invalid game state");
         require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS, "premature claim");
-        game.state = GameState.Claimed;
 
         // TODO: claim here
         console.log("claimed by: %s", msg.sender);
+
+        game.state = GameState.Claimed;
         //revert("unimplemented");
     }
 
+    // slash if opponent hasn't played for long period
     function slash() public {
-        uint256 player_last_update_block = _player().last_update_block;
+        Game storage game = _game();
+        // TODO: should allow slashing in other states?
+        require(game.state == GameState.Started || game.state == GameState.Ended, "invalid slash state");
+        
         uint256 opponent_last_update_block = _opponent().last_update_block;
-        require(player_last_update_block < opponent_last_update_block, "not your turn");
-        require(opponent_last_update_block - player_last_update_block > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
+        require(_player().last_update_block > opponent_last_update_block, "not your turn");
+        require(block.number - opponent_last_update_block > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
 
         // TODO: slash here
         console.log("slashed by: %s", msg.sender);
 
-        _game().state = GameState.Slashed;
+        game.state = GameState.Slashed;
         //emit GameSlashed();
+        //revert("unimplemented");
     }
 
     /*function hash(uint256[100] calldata board) public {
@@ -259,3 +267,13 @@ contract Battleships {
         
     }*/
 }
+
+/*
+security checklist:
+- check all state transitions
+    - get state & verified correctly everywhere
+    - set correct game state at correct position
+    - set correct last updates
+- proofs are good
+- ?
+*/
