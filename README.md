@@ -33,18 +33,18 @@ some modifications are either necessary or desired to create on-chain battleship
 
 ## IDEA #1: on-chain flow
 
-  1. open room -> wait for opponent
-  2. join room -> can both(?) start game
-    (could do syn-synack-ack flow)
-    (open = syn, join = synack, start = ack)
-    (open with room id, join room with merkle, start with merkle)
-  3. merkle root of (board + random salt) (where board is 0/1 if ship/noship)
-  each play (or both play at the same time? half duplex vs full duplex)
-    play with missile coordinate
-    (again could be syn-synack?)
-  or could also play off-chain with "blockchain"
-    each play is signed and result is shown on-chain in the end
-  4. either winner sends result or fault proof
+1. open room -> wait for opponent
+2. join room -> can both(?) start game
+  (could do syn-synack-ack flow)
+  (open = syn, join = synack, start = ack)
+  (open with room id, join room with merkle, start with merkle)
+3. merkle root of (board + random salt) (where board is 0/1 if ship/noship)
+each play (or both play at the same time? half duplex vs full duplex)
+  play with missile coordinate
+  (again could be syn-synack?)
+or could also play off-chain with "blockchain"
+  each play is signed and result is shown on-chain in the end
+4. either winner sends result or fault proof
 
 
 ### IDEA #2: simplified on-chain flow:
