@@ -16,7 +16,6 @@ contract Battleships {
     }
 
     receive() external payable {
-
     }
 
     struct Player {
@@ -24,8 +23,9 @@ contract Battleships {
         //address player;
         uint256 board_merkle_root;
         //address opponent;
-        uint256 last_move; // block.number
+        uint256 last_update; // block.number
         uint8[] missiles;
+        uint8[] acks;
         //bool is_playing;
     }
 
@@ -55,6 +55,9 @@ contract Battleships {
     // used to make sure no player is AFK while another tries to join
     uint256 immutable MAX_BLOCKS_HIGH_AND_DRY = 100;
 
+    // ships of sizes 2+3+4+5+6 = 20 acks to win game
+    uint256 immutable MAX_SHIP_CELLS = 20;
+
     function _game_id() internal view returns (uint256) {
         return players[msg.sender].game_id;
     }
@@ -83,8 +86,9 @@ contract Battleships {
         players[msg.sender] = Player({
             game_id: _game_id(),
             board_merkle_root: board_merkle_root,
-            last_move: 0,
-            missiles: arr
+            last_update: 0,
+            missiles: arr,
+            acks: arr
         });
     }
 
@@ -120,17 +124,23 @@ contract Battleships {
         _player().board_merkle_root = board_merkle_root;
     }
 
-    function Start() public {
+    function Start(uint8 coord) public {
         require(_game().state < GameState.Started, "too late to shuffle");
-        _player().last_move = block.number;
-        uint256 opponent_last_move = _opponent().last_move;
-        if (opponent_last_move == 0)
+        Player storage player = _player();
+        if (player.missiles.length == 0)
+            player.missiles.push(coord);
+        else
+            player.missiles[0] = coord;
+
+        player.last_update = block.number;
+        uint256 opponent_last_update = _opponent().last_update;
+        if (opponent_last_update == 0)
             return;
         
         // technically not really needed since the last player to call Start()
-        // will have their .last_move be greater
-        // and in Play() the lower .last_move player has the right to move next
-        if (opponent_last_move - block.number < MAX_BLOCKS_HIGH_AND_DRY) {
+        // will have their .last_update be greater
+        // and in Play() the lower .last_update player has the right to move next
+        if (opponent_last_update - block.number < MAX_BLOCKS_HIGH_AND_DRY) {
             Game storage game = _game();
             game.state = GameState.Started;
             game.start_block = block.number;
@@ -141,33 +151,56 @@ contract Battleships {
     }
 
     // must be player's turn
-    function Play(uint8 coord) public {
+    function Play(uint8 coord, bool opponent_ack) public {
         require(_game().state == GameState.Started, "no active game");
-        uint256 player_last_move = _player().last_move;
-        uint256 opponent_last_move = _opponent().last_move;
-        require(player_last_move < opponent_last_move, "not your turn");
-        require(opponent_last_move - player_last_move < MAX_BLOCKS_HIGH_AND_DRY, "stale game");
+        Player storage player = _player();
+        Player storage opponent = _opponent();
 
-        Player storage player = players[msg.sender];
+        uint256 player_last_update = player.last_update;
+        uint256 opponent_last_update = opponent.last_update;
+        require(player_last_update < opponent_last_update, "not your turn");
+        require(opponent_last_update - player_last_update < MAX_BLOCKS_HIGH_AND_DRY, "stale game");
+
+        // opponent_ack is player acknowledgment of player missile
+        // at the end of the game proofs should be published
+        if (opponent_ack) {
+            uint8 opponent_coord = opponent.missiles[opponent.missiles.length - 1];
+            player.acks.push(opponent_coord);
+            //emit MissileHit(_game_id(), opponent_coord);
+
+            if (player.acks.length == MAX_SHIP_CELLS) {
+                End(player.acks);
+                // early return as this is an ack-only for the end game.
+                // it should be generated automatically by frontend
+                // but if not, player will be slashable or faulted
+                // soon enough.
+                return;
+            }
+        }
+
         player.missiles.push(coord);
-        // - must be turn
-
-        _player().last_move = block.timestamp;
+        player.last_update = block.timestamp;
     }
 
-    //  - must reveal board on-chain within 30 seconds or slash able
-    function End(uint8[] calldata ships) public {
+    event EndGame(uint256 indexed game_id, address player, uint8[] coords);
 
+    // must reveal board on-chain within 30 seconds or slash able
+    function End(uint8[] memory coords) public {
+        // TODO: check proofs
+        //_player().last_update = block.timestamp;
+
+        emit EndGame(_game_id(), msg.sender, coords);
     }
     
     function Fault(bytes calldata proof) public {
+        revert("unimplemented");
     }
 
     function Slash() public {
-        uint256 player_last_move = _player().last_move;
-        uint256 opponent_last_move = _opponent().last_move;
-        require(player_last_move < opponent_last_move, "not your turn");
-        require(opponent_last_move - player_last_move > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
+        uint256 player_last_update = _player().last_update;
+        uint256 opponent_last_update = _opponent().last_update;
+        require(player_last_update < opponent_last_update, "not your turn");
+        require(opponent_last_update - player_last_update > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
 
         // TODO: slash here
 
@@ -189,14 +222,14 @@ contract Battleships {
     */
 
 
-    function hash(uint256[100] calldata board) public {
-        /*
+    /*function hash(uint256[100] calldata board) public {
+        
                root
             c1      c2
           c3  c4  c5  c6
           NOTE: since there are onzly 100 nodes it can be fuzzed easily...  :\ even with salt
           need to randomize each value, not just salt
           on missle need to supply proof (lsb controls the bool of the board? or maybe mod X for X options)
-        */
-    }
+        
+    }*/
 }
