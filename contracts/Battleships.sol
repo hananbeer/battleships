@@ -61,7 +61,7 @@ contract Battleships {
     uint256 immutable MAX_BLOCKS_HIGH_AND_DRY = 100;
 
     // about 3000-4500 seconds or roughly an hour
-    uint256 immutable MIN_ATTESTATION_BLOCKS = 10000;
+    uint256 immutable MIN_ATTESTATION_BLOCKS = 100;//00;
 
     function _game_id() internal view returns (uint256) {
         return players[msg.sender].game_id;
@@ -214,9 +214,13 @@ contract Battleships {
     function fault(uint256 game_id, uint32 salt) public {
         Game storage game = games[game_id];
         require(game.state == GameState.Attested, "invalid fault state");
+        // loosely-related check of whether caller is fault maker (attester) or fault prover
+        require(_player().acks.length == MAX_SHIP_CELLS, "not attester");
         game.state = GameState.Faulted;
 
-        revert("unimplemented");
+        // TODO: prove fault here
+        console.log("fault proved by: %s", msg.sender);
+        //revert("unimplemented");
     }
 
     function claim() public {
@@ -225,10 +229,11 @@ contract Battleships {
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Attested, "invalid game state");
         require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS);
-
         game.state = GameState.Claimed;
 
-        revert("unimplemented");
+        // TODO: claim here
+        console.log("claimed by: %s", msg.sender);
+        //revert("unimplemented");
     }
 
     function slash() public {
@@ -238,24 +243,11 @@ contract Battleships {
         require(opponent_last_update_block - player_last_update_block > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
 
         // TODO: slash here
+        console.log("slashed by: %s", msg.sender);
 
         _game().state = GameState.Slashed;
         //emit GameSlashed();
     }
-
-    /*
-    enum BoardPiece {
-        uint8 type; //
-    }
-
-    enum CellType {
-        EMPTY = 0,
-        SUBMARINE = 1,
-        
-        uint8 from; // 0-99 as grid cell
-        uint8 to; // 0-99 ^
-    */
-
 
     /*function hash(uint256[100] calldata board) public {
         
