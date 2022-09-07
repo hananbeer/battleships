@@ -165,7 +165,6 @@ contract Battleships {
         uint256 player_last_update_block = player.last_update_block;
         uint256 opponent_last_update_block = opponent.last_update_block;
         require(player_last_update_block < opponent_last_update_block, "not your turn");
-        console.log(opponent_last_update_block - player_last_update_block);
         require(opponent_last_update_block - player_last_update_block < MAX_BLOCKS_HIGH_AND_DRY, "stale game");
 
         // opponent_ack is player acknowledgment of player missile
@@ -223,12 +222,12 @@ contract Battleships {
         //revert("unimplemented");
     }
 
-    function claim() public {
-        Game storage game = _game();
+    function claim(uint256 game_id) public {
+        Game storage game = games[game_id];
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Attested, "invalid game state");
-        require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS);
+        require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS, "premature claim");
         game.state = GameState.Claimed;
 
         // TODO: claim here
