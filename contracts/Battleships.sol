@@ -18,25 +18,16 @@ contract Battleships {
     receive() external payable {
     }
 
-    struct Player {
-        uint256 game_id;
-        //address player;
-        uint256 board_merkle_root;
-        //address opponent;
-        uint256 last_update_block; // block.number
-        uint8[] missiles;
-        uint8[] acks;
-        //bool is_playing;
-    }
-
     enum GameState {
-        None,
-        Open,
-        Joined,
-        Started,
-        Ended,
-        Slashed,
-        Faulted
+        None,     // no game
+        Open,     // player 1 opened room
+        Joined,   // player 2 joined player 1 (one or neither requested to start)
+        Started,  // both players started game
+        Ended,    // first player to report loss
+        Attested, // winner attested their board
+        Slashed,  // afk player slashed
+        Faulted,  // player proved fault
+        Claimed   // winner claimed funds, game is sealed and no further actions can be taken
     }
 
     struct Game {
@@ -48,15 +39,29 @@ contract Battleships {
         //uint256 start_time; // block.timestamp
     }
 
+    struct Player {
+        uint256 game_id;
+        //address player;
+        uint256 board_merkle_root;
+        //address opponent;
+        uint256 last_update_block; // block.number
+        uint8[] missiles;
+        uint8[] acks;
+        //bool is_playing;
+    }
+
     Game[] public games;
     mapping (address => Player) public players;
+
+    // ships of sizes 2+3+4+5+6 = 20 acks to win game
+    uint256 immutable MAX_SHIP_CELLS = 20;
 
     // about 30-45 seconds window on arbitrum
     // used to make sure no player is AFK while another tries to join
     uint256 immutable MAX_BLOCKS_HIGH_AND_DRY = 100;
 
-    // ships of sizes 2+3+4+5+6 = 20 acks to win game
-    uint256 immutable MAX_SHIP_CELLS = 20;
+    // about 3000-4500 seconds or roughly an hour
+    uint256 immutable MIN_ATTESTATION_BLOCKS = 10000;
 
     function _game_id() internal view returns (uint256) {
         return players[msg.sender].game_id;
@@ -146,14 +151,14 @@ contract Battleships {
             game.state = GameState.Started;
             game.start_block = block.number;
             //emit GameStarted(game_id(), block.number);
-
             // both players may now call Play()
         }
     }
 
     // must be player's turn
     function play(uint8 coord, bool opponent_ack) public {
-        require(_game().state == GameState.Started, "no active game");
+        Game storage game = _game();
+        require(game.state == GameState.Started, "no active game");
         Player storage player = _player();
         Player storage opponent = _opponent();
 
@@ -188,15 +193,41 @@ contract Battleships {
 
     // must reveal board on-chain within 30 seconds or slash able
     function _end(uint8[] memory coords) internal {
-        // TODO: check proofs
-        //_player().last_update_block = block.number;
+        Game storage game = _game();
+        require(game.state == GameState.Started, "invalid end state");
+        game.state = GameState.Ended;
 
-        emit EndGame(_game_id(), msg.sender, coords);
-
-        console.log('GAME ENDED: loser = %s', msg.sender);
+        // not attempting to prove loser; forging loss will be treated as forfeit
+        emit EndGame(game.id, msg.sender, coords);
+        console.log('GAME ENDED: unproved loser = %s', msg.sender);
     }
     
-    function fault(bytes calldata proof) public {
+    function attest(uint8[] calldata coords, uint32 salt) public {
+        Game storage game = _game();
+        // TODO: create ERC20 tokens on testnet
+        // which can be bridged for ETH on arbitrum/mainnet
+        require(game.state == GameState.Ended, "invalid attest state");
+        game.state = GameState.Attested;
+        _player().last_update_block = block.number;
+    }
+
+    function fault(uint256 game_id, uint32 salt) public {
+        Game storage game = games[game_id];
+        require(game.state == GameState.Attested, "invalid fault state");
+        game.state = GameState.Faulted;
+
+        revert("unimplemented");
+    }
+
+    function claim() public {
+        Game storage game = _game();
+        // TODO: create ERC20 tokens on testnet
+        // which can be bridged for ETH on arbitrum/mainnet
+        require(game.state == GameState.Attested, "invalid game state");
+        require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS);
+
+        game.state = GameState.Claimed;
+
         revert("unimplemented");
     }
 
