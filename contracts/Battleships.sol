@@ -210,7 +210,12 @@ contract Battleships {
         Game storage game = _game();
         require(game.state == GameState.Started, "invalid end state");
 
-        console.log('GAME ENDED: unproved loser = %s', msg.sender);
+        //console.log('GAME ENDED: unproved loser = %s', msg.sender);
+        if (msg.sender == game.player2)
+            console.log("player 1 wins - proof required");
+        else
+            console.log("player 2 wins - proof required");
+
         // not attempting to prove loser; forging loss will be treated as forfeit
         emit EndGame(game.id, msg.sender, coords);
         game.state = GameState.Ended;
