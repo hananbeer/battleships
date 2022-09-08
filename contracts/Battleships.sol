@@ -225,24 +225,52 @@ contract Battleships {
         //emit GameAttested(game.id, msg.sender, coords, salt)
     }
 
-    function _verify_fault(uint32 salt) internal returns (bool) {
+    function _verify_fault(uint256 merkle_root, uint32 salt) internal returns (bool) {
+        // TODO: maybe if salt is too big need to slash as well?
+        // (might overflow or revert in that case so need to slash)
+
         uint8[] memory coords = _opponent().acks;
-        uint32[256] memory board;
+        uint256[256] memory board;
+        
+        // we shouldn't sprinkle salt on the data itself ;)
+        // (note: frontend should salt the same bits)
+        salt <<= 8;
+
         // fill salt
-        for (uint256 i = 0; i < 256; i++) {
+        for (uint256 i = 0; i < 256/*board.length*/; i++) {
             board[i] = salt;
         }
 
         // mark ships
-        for (uint i = 0; i < coords.length; i++) {
+        for (uint256 i = 0; i < coords.length; i++) {
             board[coords[i]] |= 1;
         }
 
+        console.log("board[0]: %s", board[0]);
+        // fill hashes
+        for (uint256 i = 0; i < 256/*board.length*/; i++) {
+            board[i] = uint256(keccak256(abi.encode(board[i])));
+        }
+        console.log("keccak256(board[0])");
+        console.logBytes32(bytes32(board[0]));
+
+        uint256 len = 128/*board.length / 2*/;
+        while (len > 0) {
+            for (uint256 i = 0; i < len; i++) {
+                board[i] = uint256(keccak256(abi.encode(board[2*i], board[2*i+1])));
+                //console.log("%s : %s", len, i);
+                //console.logBytes32(bytes32(board[i]));
+            }
+            console.log("[%s] keccak256(board[0]):", len);
+            console.logBytes32(bytes32(board[0]));
+
+            len /= 2;
+        }
         // make merkle
         // TODO: ...
         // ...
 
-        return false;
+        return board[0] != merkle_root;
     }
 
     function fault(uint256 game_id, uint32 salt) public {
@@ -252,13 +280,15 @@ contract Battleships {
 
         Game storage game = games[game_id];
         require(game.state == GameState.Attested, "invalid fault state");
-        require(_verify_fault(salt), "no fault");
         game.state = GameState.Faulted;
+
+        Player storage opponent = _opponent();
+        require(_verify_fault(opponent.board_merkle_root, salt), "no fault");
         
         // check if fault discovered within fraud proof window
         // even if it's too late to slash we don't revert and report fraud anyway
         //uint256 fee = 0;
-        if (block.number - _opponent().last_update_block < MIN_ATTESTATION_BLOCKS) {
+        if (block.number - opponent.last_update_block < MIN_ATTESTATION_BLOCKS) {
             // TODO: implement stake
             //fee = _opponent().stake;
         }
