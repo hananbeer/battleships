@@ -37,6 +37,10 @@ contract Battleships {
         GameState state;
         uint256 start_block; // block.number
         //uint256 start_time; // block.timestamp
+
+        uint256 attested_root;
+        uint256 attested_salt;
+        uint8[] attested_coords;
     }
 
     struct Player {
@@ -86,10 +90,10 @@ contract Battleships {
             revert("no opponent");
     }
 
-    function _init_player(uint256 board_merkle_root) internal {
+    function _init_player(uint256 game_id, uint256 board_merkle_root) internal {
         uint8[] memory arr;
         players[msg.sender] = Player({
-            game_id: _game_id(),
+            game_id: game_id,
             board_merkle_root: board_merkle_root,
             last_update_block: 0,
             missiles: arr,
@@ -100,15 +104,20 @@ contract Battleships {
     // called by player 1
     function open(uint256 board_merkle_root) public returns (uint256) {
         uint256 id = games.length;
+        uint8[] memory empty;
+
         games.push(Game(
-            id,
-            msg.sender,
-            address(0x0),
-            GameState.Open,
-            0
+            id,             // game_id
+            msg.sender,     // player1
+            address(0x0),   // player2
+            GameState.Open, // state
+            0,              // start_block
+            0x0,            // attested_root
+            0x0,            // attested_salt
+            empty           // attested_coords
         ));
 
-        _init_player(board_merkle_root);
+        _init_player(id, board_merkle_root);
         return id;
     }
 
@@ -119,7 +128,7 @@ contract Battleships {
         require(game.player2 == address(0x0), "room full");
         game.state = GameState.Joined; // note no state check because game.player2 == 0 is kind of the check
         game.player2 = msg.sender;
-        _init_player(board_merkle_root);
+        _init_player(game.id, board_merkle_root);
         //return game.player1;
     }
 
@@ -209,6 +218,12 @@ contract Battleships {
     
     // TODO: replace all coords with bytes20 (as long as using 20 ship cells; or bytes32/uint256)
     function attest(uint8[] calldata coords, uint32 salt) public {
+        // TODO: store salt somewhere
+        // TODO: only report remaining coords
+        // TODO: try to verify coords reported were indeed the ships hit & in order!
+        // TODO: idea: store ship id below salt (instead of just 0/1)
+        // (this way can also verify ships positioned correctly)
+
         Game storage game = _game();
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
@@ -221,15 +236,20 @@ contract Battleships {
         // overriding the player's acks with *all* their ship positions
         // this is sort-of ok since game has ended
         // not the cleanest solution but somewhat cheaper on gas than ther designs :)
-        player.acks = coords;
+        //player.acks = coords;
+        
+        game.attested_coords = coords;
+        game.attested_salt = salt; // can save gas by re-using a certain slot?
+        // TODO: verify root cannot be sweeped; probably not because attest() only attests current game
+        // if a new game is opened, cannot attest previous game and will be slashed
+        game.attested_root = player.board_merkle_root;
         //emit GameAttested(game.id, msg.sender, coords, salt)
     }
 
-    function _verify_fault(uint256 merkle_root, uint32 salt) internal returns (bool) {
+    function _verify_fault(uint8[] memory coords, uint256 merkle_root, uint256 salt) internal view returns (bool) {
         // TODO: maybe if salt is too big need to slash as well?
         // (might overflow or revert in that case so need to slash)
 
-        uint8[] memory coords = _opponent().acks;
         uint256[256] memory board;
         
         // we shouldn't sprinkle salt on the data itself ;)
@@ -243,16 +263,18 @@ contract Battleships {
 
         // mark ships
         for (uint256 i = 0; i < coords.length; i++) {
-            board[coords[i]] |= 1;
+            // this won't work because acks are inserted in a different order than ships[id]
+            // (but it may be sorted?)
+            board[coords[i]] |= /*i +*/ 1;
         }
 
-        console.log("board[0]: %s", board[0]);
         // fill hashes
+        //console.log("board[0]: %s", board[0]);
         for (uint256 i = 0; i < 256/*board.length*/; i++) {
             board[i] = uint256(keccak256(abi.encode(board[i])));
         }
-        console.log("keccak256(board[0])");
-        console.logBytes32(bytes32(board[0]));
+        //console.log("keccak256(board[0])");
+        //console.logBytes32(bytes32(board[0]));
 
         uint256 len = 128/*board.length / 2*/;
         while (len > 0) {
@@ -261,19 +283,16 @@ contract Battleships {
                 //console.log("%s : %s", len, i);
                 //console.logBytes32(bytes32(board[i]));
             }
-            console.log("[%s] keccak256(board[0]):", len);
-            console.logBytes32(bytes32(board[0]));
+            //console.log("[%s] keccak256(board[0]):", len);
+            //console.logBytes32(bytes32(board[0]));
 
             len /= 2;
         }
-        // make merkle
-        // TODO: ...
-        // ...
 
         return board[0] != merkle_root;
     }
 
-    function fault(uint256 game_id, uint32 salt) public {
+    function fault(uint256 game_id) public {
         // loosely-related check of whether caller is fault maker (attester) or fault prover
         // TODO: try to find better signal for fault detection?
         require(_player().acks.length == MAX_SHIP_CELLS, "not attester");
@@ -283,7 +302,12 @@ contract Battleships {
         game.state = GameState.Faulted;
 
         Player storage opponent = _opponent();
-        require(_verify_fault(opponent.board_merkle_root, salt), "no fault");
+
+        // TODO: currently only verified a fake board.
+        // but what if someone attests the right board but their acks
+        // are fake??
+        
+        require(_verify_fault(game.attested_coords, game.attested_root, game.attested_salt), "no fault");
         
         // check if fault discovered within fraud proof window
         // even if it's too late to slash we don't revert and report fraud anyway
