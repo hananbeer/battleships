@@ -113,13 +113,14 @@ contract Battleships {
     }
 
     // called by player 2
-    function join(uint256 game_id, uint256 board_merkle_root) public {
+    function join(uint256 game_id, uint256 board_merkle_root) public /*returns (address)*/ {
         Game storage game = games[game_id];
         require(game.player1 != address(0x0), "room not open");
         require(game.player2 == address(0x0), "room full");
+        game.state = GameState.Joined; // note no state check because game.player2 == 0 is kind of the check
         game.player2 = msg.sender;
-        game.state = GameState.Joined;
         _init_player(board_merkle_root);
+        //return game.player1;
     }
 
     // for ease of use Open & Join accept merkle roots which may represent
@@ -131,7 +132,9 @@ contract Battleships {
     }
 
     function start(uint8 coord) public {
-        require(_game().state < GameState.Started, "too late to shuffle");
+        Game storage game = _game();
+        require(game.state < GameState.Started, "too late to shuffle");
+
         Player storage player = _player();
         if (player.missiles.length == 0)
             player.missiles.push(coord);
@@ -144,10 +147,9 @@ contract Battleships {
             return;
         
         // technically not really needed since the last player to call Start()
-        // will have their .last_update_block be greater
-        // and in Play() the lower .last_update_block player has the right to move next
+        // will have their last_update_block be greater
+        // and in Play() the lower last_update_block player has the right to move next
         if (block.number - opponent_last_update_block < MAX_BLOCKS_HIGH_AND_DRY) {
-            Game storage game = _game();
             game.state = GameState.Started;
             game.start_block = block.number;
             //emit GameStarted(game_id(), block.number);
@@ -159,14 +161,14 @@ contract Battleships {
     function play(uint8 coord, bool opponent_ack) public {
         Game storage game = _game();
         require(game.state == GameState.Started, "no active game");
+    
         Player storage player = _player();
         Player storage opponent = _opponent();
-
         uint256 player_last_update_block = player.last_update_block;
         uint256 opponent_last_update_block = opponent.last_update_block;
         require(player_last_update_block < opponent_last_update_block, "not your turn");
         require(opponent_last_update_block - player_last_update_block < MAX_BLOCKS_HIGH_AND_DRY, "stale game");
-
+    
         player.last_update_block = block.number;
 
         // opponent_ack is player acknowledgment of player missile
@@ -177,8 +179,11 @@ contract Battleships {
             //emit MissileHit(_game_id(), opponent_coord);
 
             if (player.acks.length == MAX_SHIP_CELLS) {
+                // TODO: this should be public and up to player frontend to call, probably?
+                // (it's probably cleaner code too; it also allows any player to forfeit at any time)
+                // also presents a nice idea: modular logic where one game scenario forfeit is allowed
                 _end(player.acks);
-                // early return as this is an ack-only for the end game.
+                // early return as this is an ack-only for the end game. (missile coord is ignored)
                 // it should be generated automatically by frontend
                 // but if not, player will be slashable or faulted
                 // soon enough.
@@ -202,56 +207,98 @@ contract Battleships {
         game.state = GameState.Ended;
     }
     
+    // TODO: replace all coords with bytes20 (as long as using 20 ship cells; or bytes32/uint256)
     function attest(uint8[] calldata coords, uint32 salt) public {
         Game storage game = _game();
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Ended, "invalid attest state");
         game.state = GameState.Attested;
-        _player().last_update_block = block.number;
+
+        Player storage player = _player();
+        player.last_update_block = block.number;
+        // this is kinda hacky part:
+        // overriding the player's acks with *all* their ship positions
+        // this is sort-of ok since game has ended
+        // not the cleanest solution but somewhat cheaper on gas than ther designs :)
+        player.acks = coords;
+        //emit GameAttested(game.id, msg.sender, coords, salt)
+    }
+
+    function _verify_fault(uint32 salt) internal returns (bool) {
+        uint8[] memory coords = _opponent().acks;
+        uint32[256] memory board;
+        // fill salt
+        for (uint256 i = 0; i < 256; i++) {
+            board[i] = salt;
+        }
+
+        // mark ships
+        for (uint i = 0; i < coords.length; i++) {
+            board[coords[i]] |= 1;
+        }
+
+        // make merkle
+        // TODO: ...
+        // ...
+
+        return false;
     }
 
     function fault(uint256 game_id, uint32 salt) public {
+        // loosely-related check of whether caller is fault maker (attester) or fault prover
+        // TODO: try to find better signal for fault detection?
+        require(_player().acks.length == MAX_SHIP_CELLS, "not attester");
+
         Game storage game = games[game_id];
         require(game.state == GameState.Attested, "invalid fault state");
-        // loosely-related check of whether caller is fault maker (attester) or fault prover
-        require(_player().acks.length == MAX_SHIP_CELLS, "not attester");
+        require(_verify_fault(salt), "no fault");
+        game.state = GameState.Faulted;
+        
+        // check if fault discovered within fraud proof window
+        // even if it's too late to slash we don't revert and report fraud anyway
+        //uint256 fee = 0;
+        if (block.number - _opponent().last_update_block < MIN_ATTESTATION_BLOCKS) {
+            // TODO: implement stake
+            //fee = _opponent().stake;
+        }
 
         // TODO: prove fault here
         console.log("fault proved by: %s", msg.sender);
 
-        game.state = GameState.Faulted;
+        //emit GameFault(game.id, msg.sender);
         //revert("unimplemented");
     }
 
     function claim(uint256 game_id) public {
+        require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS, "premature claim");
+
         Game storage game = games[game_id];
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Attested, "invalid game state");
-        require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS, "premature claim");
+        game.state = GameState.Claimed;
 
         // TODO: claim here
         console.log("claimed by: %s", msg.sender);
-
-        game.state = GameState.Claimed;
+        //emit GameClaimed(..);
         //revert("unimplemented");
     }
 
     // slash if opponent hasn't played for long period
     function slash() public {
-        Game storage game = _game();
-        // TODO: should allow slashing in other states?
-        require(game.state == GameState.Started || game.state == GameState.Ended, "invalid slash state");
-        
         uint256 opponent_last_update_block = _opponent().last_update_block;
         require(_player().last_update_block > opponent_last_update_block, "not your turn");
         require(block.number - opponent_last_update_block > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
 
+        Game storage game = _game();
+        // TODO: should allow slashing in other states?
+        require(game.state == GameState.Started || game.state == GameState.Ended, "invalid slash state");        
+        game.state = GameState.Slashed;
+
         // TODO: slash here
         console.log("slashed by: %s", msg.sender);
 
-        game.state = GameState.Slashed;
         //emit GameSlashed();
         //revert("unimplemented");
     }
