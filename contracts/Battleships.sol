@@ -65,13 +65,13 @@ contract Battleships {
     // about 3000-4500 seconds or roughly an hour
     uint256 immutable MIN_ATTESTATION_BLOCKS = 100;//00;
 
-    function game_id() public view returns (uint256) {
+    function get_game_id() public view returns (uint256) {
         return players[msg.sender].game_id;
     }
 
     function _game() internal view returns (Game storage) {
         // TODO: bound checks
-        return games[game_id()];
+        return games[get_game_id()];
     }
 
     function _player() internal view returns (Player storage) {
@@ -101,11 +101,11 @@ contract Battleships {
 
     // called by player 1
     function open(uint256 board_merkle_root) public returns (uint256) {
-        uint256 id = games.length;
+        uint256 game_id = games.length;
         uint8[] memory empty;
 
         games.push(Game(
-            id,             // game_id
+            game_id,        // game_id
             msg.sender,     // player1
             address(0x0),   // player2
             GameState.Open, // state
@@ -115,8 +115,8 @@ contract Battleships {
             empty           // attested_coords
         ));
 
-        _init_player(id, board_merkle_root);
-        return id;
+        _init_player(game_id, board_merkle_root);
+        return game_id;
     }
 
     // called by player 2
@@ -126,7 +126,7 @@ contract Battleships {
         require(game.player2 == address(0x0), "room full");
         game.state = GameState.Joined; // note no state check because game.player2 == 0 is kind of the check
         game.player2 = msg.sender;
-        _init_player(game.id, board_merkle_root);
+        _init_player(game_id, board_merkle_root);
         //return game.player1;
     }
 
