@@ -210,7 +210,7 @@ class Player {
   }
 
   // TODO: remove need for first_shot
-  setup(ships, salt, first_shot) {
+  setup(ships, salt, first_shot=0x00) {
     //console.log(`preparing player ${this.id} @ ${this.address}`)
     this.salt = salt
     this.ships = ships
@@ -239,19 +239,19 @@ class Player {
 }
 
 const Scenario = {
-  normal: 0,
-  fraud: 1,
-  fault: 2,
-  bail: 4,
-  slash: 8,
+  normal:    0x00,
+  fraud:     0x01,
+  fault:     0x02,
+  bail:      0x04,
+  slash:     0x08
 }
 
 const ScenarioStrings = {
-  0: 'normal',
-  1: 'fraud',
-  2: 'fault',
-  4: 'bail',
-  8: 'slash',
+  0x00: 'normal',
+  0x01: 'fraud',
+  0x02: 'fault',
+  0x04: 'bail',
+  0x08: 'slash'
 }
 
 class GameSimulator {
@@ -287,7 +287,7 @@ class GameSimulator {
     const salt1 = 0x100
     const salt2 = 0x200
 
-    this.player1.setup(ships1, salt1, m1)
+    this.player1.setup(ships1, salt1)
     this.player2.setup(ships2, salt2, m2)
 
     // open
@@ -393,7 +393,7 @@ class GameSimulator {
       if (do_bail && do_slash)
         console.warn("(expect: 'invalid state for attest')")
 
-      await this.player1.game.attest(this.player1.ships, this.player1.salt ^ (do_fraud ? 1 : 0))
+      await this.player1.game.attest(this.player1.ships, this.player1.salt/* ^ (do_fraud ? 1 : 0)*/)
     } catch (e) {
       console.warn(e.message)
     }
@@ -467,12 +467,12 @@ async function main() {
   console.log('deployed:', game.contract.address)
 
   let scenarios = [
-    // Scenario.normal,                  // normal game
-    // Scenario.fault,                   // illegal fault proof
-    // Scenario.fraud | Scenario.fault,  // legal fault proof
-    // Scenario.slash,                   // illegal slash
-    // Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
-    // Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
+    //Scenario.normal,                  // normal game
+    //Scenario.fault,                   // illegal fault proof
+    Scenario.fraud | Scenario.fault,  // legal fault proof
+    //Scenario.slash,                   // illegal slash
+    Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
+    Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
     Scenario.fraud | Scenario.fault | Scenario.bail | Scenario.slash, // all hell breaks loose
   ]
 

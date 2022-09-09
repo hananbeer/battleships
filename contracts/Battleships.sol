@@ -182,9 +182,10 @@ contract Battleships {
 
         // opponent_ack is player acknowledgment of player missile
         // at the end of the game proofs should be published
-        if (opponent_ack) {
-            uint8 opponent_coord = opponent.missiles[opponent.missiles.length - 1];
-            player.acks.push(opponent_coord);
+        if (opponent.missiles.length > 0 && opponent_ack) {
+            // acks are indices to missiles that hit
+            player.acks.push(uint8(opponent.missiles.length));
+            //uint8 opponent_coord = opponent.missiles[opponent.missiles.length - 1];
             //emit MissileHit(_game_id(), opponent_coord);
 
             if (player.acks.length == MAX_SHIP_CELLS) {
@@ -251,12 +252,12 @@ contract Battleships {
         //emit GameAttested(game.id, msg.sender, coords, salt)
     }
 
-    function _verify_fault(uint8[] memory coords, uint256 merkle_root, uint256 salt) internal view returns (bool) {
+    function _verify_fault(uint8[] memory coords, uint8[] memory missiles, uint8[] memory missiles_acks, uint256 merkle_root, uint256 salt) internal view returns (bool) {
         // TODO: maybe if salt is too big need to slash as well?
         // (might overflow or revert in that case so need to slash)
 
         uint256[256] memory board;
-        
+
         // we shouldn't sprinkle salt on the data itself ;)
         // (note: frontend should salt the same bits)
         salt <<= 8;
@@ -268,9 +269,20 @@ contract Battleships {
 
         // mark ships
         for (uint256 i = 0; i < coords.length; i++) {
-            // this won't work because acks are inserted in a different order than ships[id]
-            // (but it may be sorted?)
             board[coords[i]] |= /*i +*/ 1;
+        }
+
+        // unmark locations where missiles did not get ack (ie. miss)
+        uint256 j = 0;
+        for (uint256 i = 0; i < missiles.length; i++) {
+            // acks are indices to missiles
+            // so missed missiles are set of (missles - acks)
+            if (j < missiles_acks.length && missiles_acks[j] == i) { // missile hit, skip
+                j++;
+                continue;
+            }
+
+            board[missiles[i]] &= uint256(int256(-2)); // 0xff..fe, to clear least-significant bit
         }
 
         // fill hashes
@@ -312,7 +324,7 @@ contract Battleships {
         // but what if someone attests the right board but their acks
         // are fake??
         
-        require(_verify_fault(game.attested_coords, game.attested_root, game.attested_salt), "no fault");
+        require(_verify_fault(game.attested_coords, _player().missiles, opponent.acks, game.attested_root, game.attested_salt), "no fault");
         
         // check if fault discovered within fraud proof window
         // even if it's too late to slash we don't revert and report fraud anyway
