@@ -184,7 +184,7 @@ contract Battleships {
         // at the end of the game proofs should be published
         if (opponent.missiles.length > 0 && opponent_ack) {
             // acks are indices to missiles that hit
-            player.acks.push(uint8(opponent.missiles.length));
+            player.acks.push(uint8(opponent.missiles.length - 1));
             //uint8 opponent_coord = opponent.missiles[opponent.missiles.length - 1];
             //emit MissileHit(_game_id(), opponent_coord);
 
@@ -236,6 +236,9 @@ contract Battleships {
         require(game.state == GameState.Ended, "invalid state for attest");
         game.state = GameState.Attested;
 
+        // only winner can attest the game
+        require(_opponent().acks.length == MAX_SHIP_CELLS, "not winner");
+
         Player storage player = _player();
         player.last_update_block = block.number;
         // this is kinda hacky part:
@@ -252,7 +255,7 @@ contract Battleships {
         //emit GameAttested(game.id, msg.sender, coords, salt)
     }
 
-    function _verify_fault(uint8[] memory coords, uint8[] memory missiles, uint8[] memory missiles_acks, uint256 merkle_root, uint256 salt) internal view returns (bool) {
+    function _verify_fault(uint8[] memory coords, uint8[] memory missiles, uint8[] memory missiles_acks, uint256 merkle_root, uint256 salt) internal pure returns (bool) {
         // TODO: maybe if salt is too big need to slash as well?
         // (might overflow or revert in that case so need to slash)
 
@@ -279,10 +282,14 @@ contract Battleships {
             // so missed missiles are set of (missles - acks)
             if (j < missiles_acks.length && missiles_acks[j] == i) { // missile hit, skip
                 j++;
+                //console.log("missile hit %s -> %s", i, missiles[i]);
                 continue;
             }
+            //console.log("removing missile %s -> %s", i, missiles[i]);
 
+            //console.log("%s before: %s", i, board[missiles[i]]);
             board[missiles[i]] &= uint256(int256(-2)); // 0xff..fe, to clear least-significant bit
+            //console.log("%s after: %s", i, board[missiles[i]]);
         }
 
         // fill hashes
@@ -310,15 +317,15 @@ contract Battleships {
     }
 
     function fault(uint256 game_id) public {
-        // loosely-related check of whether caller is fault maker (attester) or fault prover
-        // TODO: try to find better signal for fault detection?
-        //require(_player().acks.length == MAX_SHIP_CELLS, "not not-attester");
-
         Game storage game = games[game_id];
         require(game.state == GameState.Attested, "invalid state for fault");
         game.state = GameState.Faulted;
 
         Player storage opponent = _opponent();
+        // loosely-related check of whether caller is fault maker (attester) or fault prover
+        // TODO: try to find better signal for fault detection?
+        require(_player().acks.length == MAX_SHIP_CELLS, "not loser");
+        //require(opponent.board_merkle_root == game.attested_root);
 
         // TODO: currently only verified a fake board.
         // but what if someone attests the right board but their acks
@@ -338,7 +345,6 @@ contract Battleships {
         console.log("fault proved by: %s", msg.sender);
 
         //emit GameFault(game.id, msg.sender);
-        //revert("unimplemented");
     }
 
     // TODO: add game config to require fault() before claim()
@@ -354,7 +360,6 @@ contract Battleships {
         // TODO: claim here
         console.log("claimed by: %s", msg.sender);
         //emit GameClaimed(..);
-        //revert("unimplemented");
     }
 
     // slash if opponent hasn't played for long period
@@ -372,19 +377,7 @@ contract Battleships {
         console.log("slashed by: %s", msg.sender);
 
         //emit GameSlashed();
-        //revert("unimplemented");
     }
-
-    /*function hash(uint256[100] calldata board) public {
-        
-               root
-            c1      c2
-          c3  c4  c5  c6
-          NOTE: since there are onzly 100 nodes it can be fuzzed easily...  :\ even with salt
-          need to randomize each value, not just salt
-          on missle need to supply proof (lsb controls the bool of the board? or maybe mod X for X options)
-        
-    }*/
 }
 
 /*

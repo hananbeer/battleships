@@ -1,13 +1,6 @@
-// We require the Hardhat Runtime Environment explicitly here. This is optional
-// but useful for running the script in a standalone fashion through `node <script>`.
-//
-// You can also run a script with `npx hardhat run <script>`. If you do that, Hardhat
-// will compile your contracts, add the Hardhat Runtime Environment's members to the
-// global scope, and execute the script.
 const hre = require("hardhat")
 
-// A1-P16 or Ax1-PxF or simply 0x00-0xFF
-// ABCDEFGHIJKLMNOP
+const TEST_SALT_FRAUD = false
 
 const ships1 = [
   0x11, 0x21,                   // B2-C2 destroyer
@@ -70,10 +63,10 @@ function make_merkle_tree(board) {
 
 function make_proof(merkle_tree, index) {
   // at each node i, bring hash i and adjacent hash at i^1
-  // root
-  //   0     1
-  // 00 01 10 11
-  // ...........
+  //     root
+  //   0      1
+  // 00 01  10 11
+  // ............
 
   // the leaves at the last level contain raw values, not hashes
   // and their direct parents are their hashes, hence the -1
@@ -83,7 +76,6 @@ function make_proof(merkle_tree, index) {
   
   // skip the value's hash since it will be calculated from the value
   height--
-  //index >>= 1
 
   while (height > 0) {
     rank = merkle_tree[height]
@@ -140,9 +132,7 @@ function draw_board(ships, missiles=[]) {
   for (let i = 0; i < 0x100; i++) {
     if (i % 0x10 == 0)
       output += '\n' + (i/0x10).toString(16).toUpperCase() + '|'
-    
-    // uncomment to replace ships to board:
-    // if (board[i] ^ 1 == salt) // ship (no xor for no ship but avoids mistakes if salt is wrong)
+
     let has_ship = (ships.indexOf(i) != -1)
     let has_missile = (missiles.indexOf(i) != -1)
     if (has_ship && has_missile)
@@ -200,6 +190,16 @@ function test_merkle(num_samples=5) {
 
   console.log(`${num_samples} merkle paths verified!`)
   return true
+}
+
+async function fast_forward(blocks) {
+  txns = []
+  for (let i = 0; i < blocks; i++) {
+    txns.push(
+      hre.network.provider.send('evm_mine', [])
+    )
+  }
+  return Promise.all(txns)
 }
 
 class Player {
@@ -279,13 +279,13 @@ class GameSimulator {
 
     // setup
     let missiles1 = [0x55]
-    let missiles2 = [0x00] // first missile shot at 0x00 (important for testing)
+    let missiles2 = [0x00]
 
     let m1 = missiles1[0]
     let m2 = missiles2[0]
 
-    const salt1 = 0x100
-    const salt2 = 0x200
+    const salt1 = 0x0
+    const salt2 = 0x0
 
     this.player1.setup(ships1, salt1)
     this.player2.setup(ships2, salt2, m2)
@@ -322,6 +322,7 @@ class GameSimulator {
         draw_board(ships1, missiles2)
       }
 
+      // TODO: get last missile from emitted event
       let is_p2_hit = (ships1.indexOf(m2) != -1)
       promises.push(
         this.player1.game.play(m1, do_fraud ? false : is_p2_hit) // player 1 may or may not cheat.
@@ -343,7 +344,6 @@ class GameSimulator {
       promises.push(
         this.player2.game.play(m2, is_p1_hit) // player 2 always honest.
       )
-
     }
   
     await Promise.all(promises)
@@ -352,6 +352,7 @@ class GameSimulator {
     // _end() was called by last play() of player2 which is playing honest
   
     // -- finale --
+
     // slash
     if (do_slash) {
       try {
@@ -366,9 +367,8 @@ class GameSimulator {
       // hence player2 may slash player1 (if slashing conditions met)
       if (do_bail) {
         console.log('bail: time traveling...')
-        for (let i = 0; i < 101; i++)
-          await hre.network.provider.send('evm_mine', [])
-    
+        await fast_forward(101)
+
         try {
           console.log('slash: player 2 trying slash legally')
           console.log('(expect: slashed by ..)')
@@ -393,7 +393,8 @@ class GameSimulator {
       if (do_bail && do_slash)
         console.warn("(expect: 'invalid state for attest')")
 
-      await this.player1.game.attest(this.player1.ships, this.player1.salt/* ^ (do_fraud ? 1 : 0)*/)
+      // NOTE: there's another type of fraud that can be tested here - providing incorrect salt
+      await this.player1.game.attest(this.player1.ships, this.player1.salt ^ (TEST_SALT_FRAUD && do_fraud ? 1 : 0))
     } catch (e) {
       console.warn(e.message)
     }
@@ -420,8 +421,7 @@ class GameSimulator {
     // claim
     try {
       console.log('claim: time traveling...')
-      for (let i = 0; i < 101; i++)
-        await hre.network.provider.send('evm_mine', [])
+      await fast_forward(101)
   
       console.log('claim: player 1 claiming reward')
       if ((do_bail && do_slash) || (do_fraud && do_fault))
@@ -467,10 +467,10 @@ async function main() {
   console.log('deployed:', game.contract.address)
 
   let scenarios = [
-    //Scenario.normal,                  // normal game
-    //Scenario.fault,                   // illegal fault proof
+    Scenario.normal,                  // normal game
+    Scenario.fault,                   // illegal fault proof
     Scenario.fraud | Scenario.fault,  // legal fault proof
-    //Scenario.slash,                   // illegal slash
+    Scenario.slash,                   // illegal slash
     Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
     Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
     Scenario.fraud | Scenario.fault | Scenario.bail | Scenario.slash, // all hell breaks loose
@@ -488,12 +488,10 @@ async function main() {
   }
 }
 
-//print_config()
 main().catch((error) => {
   console.error(error)
   process.exitCode = 1
 })
 .then(() => {
-  //print_config()
   console.log('done!')
 })
