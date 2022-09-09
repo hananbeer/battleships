@@ -1,4 +1,6 @@
 const hre = require("hardhat")
+const prompt = require('prompt')
+prompt.start()
 
 const TEST_SALT_FRAUD = false
 
@@ -265,6 +267,23 @@ class Player {
     this.missiles.push(player_coord)
     return this.game.play(player_coord, opponent_ack)
   }
+
+  async slash() {
+    return this.game.slash()
+  }
+
+  async attest() {
+    return this.game.attest(this.ships, this.salt)
+  }
+
+  async fault(game_id) {
+    return this.game.fault(game_id)
+  }
+
+  async claim(game_id) {
+    return this.game.claim(game_id)
+  }
+
 }
 
 class GameSimulator {
@@ -306,6 +325,24 @@ class GameSimulator {
     return this.player2.play(m2, is_p1_hit) // player 2 always honest.
   }
 
+  async try(promise, description, expect) {
+    try {
+      console.log(description)
+      await promise
+      if (!expect)
+        console.log('\tPASS (success)')
+      else
+        console.warn('\tFAIL:', expect)
+    } catch (e) {
+      console.log('expect:', expect)
+      let result = e.message.slice(72, -1)
+      if (result == expect)
+        console.log('\tPASS (revert)')
+      else
+        console.warn('\tFAIL:', e.message)
+    }
+  }
+
   async simulate(scenario, verbose=false) {
     const do_fraud = ((scenario & Scenario.fraud) != 0)
     const do_fault = ((scenario & Scenario.fault) != 0)
@@ -316,8 +353,8 @@ class GameSimulator {
     const verbose_print = (verbose ? console.log : (x) => {})
 
     // setup
-    const salt1 = 0x0
-    const salt2 = 0x0
+    const salt1 = 0x100
+    const salt2 = 0x200
     this.player1.setup(ships1, salt1)
     this.player2.setup(ships2, salt2)
 
@@ -361,13 +398,11 @@ class GameSimulator {
 
     // slash
     if (do_slash) {
-      try {
-        console.log('slash: player 1 trying to slash illegaly during their own turn')
-        console.warn("(expect: 'cannot slash during your turn')")
-        await this.player1.game.slash()
-      } catch (e) {
-        console.warn(e.message)
-      }
+      await this.try(
+        this.player1.slash(),
+        'slash: player 1 trying to slash illegaly during their own turn',
+        'cannot slash during your turn'
+      )
   
       // player2 played last by reporting loss and ending game
       // hence player2 may slash player1 (if slashing conditions met)
@@ -375,70 +410,57 @@ class GameSimulator {
         console.log('bail: time traveling...')
         await fast_forward(101)
 
-        try {
-          console.log('slash: player 2 trying slash legally')
-          console.log('(expect: slashed by ..)')
-          await this.player2.game.slash()
-        } catch (e) {
-          console.warn(e.message)
-        }
+        await this.try(
+          this.player2.slash(),
+          'slash: player 2 trying slash legally',
+          null
+        )
       } else {
-        try {
-          console.log('slash: player 2 trying slash prematurely')
-          console.warn("(expect: 'not yet slashable')")
-          await this.player2.game.slash()
-        } catch (e) {
-          console.warn(e.message)
-        }
+        await this.try(
+          this.player2.slash(),
+          'slash: player 2 trying slash prematurely',
+          'not yet slashable'
+        )
       }
     }
   
     // attest
-    try {
-      console.log('attest: player 1 committed to tell the truth, the whole truth and nothing but the truth')
-      if ((do_bail && do_slash) || do_drop_round)
-        console.warn("(expect: 'invalid state for attest')")
-
-      // NOTE: there's another type of fraud that can be tested here - providing incorrect salt
-      await this.player1.game.attest(this.player1.ships, this.player1.salt ^ (TEST_SALT_FRAUD && do_fraud ? 1 : 0))
-    } catch (e) {
-      console.warn(e.message)
-    }
+    // NOTE: there's another type of fraud that can be tested here - providing incorrect salt
+    let attest_salt = this.player1.salt ^ (TEST_SALT_FRAUD && do_fraud ? 1 : 0)
+    await this.try(
+      this.player1.game.attest(this.player1.ships, attest_salt),
+      'attest: player 1 committed to tell the truth, the whole truth and nothing but the truth',
+      ((do_bail && do_slash) || do_drop_round) ? 'invalid state for attest' : null
+    )
 
     // fault
     if (do_fault) {
-      console.log('fault: player 2 proving player 1 fraud moves')
-      if (do_fraud) {
-        if (do_bail && do_slash)
-          console.warn("(expect: 'invalid state for fault')")
-        else
-          console.log('(expect: fault proved by: ..)')
-      } else {
-        console.warn("(expect: 'no fault')")
-      }
+      let expect_fault = null
+      if (do_bail && do_slash)
+        expect_fault = 'invalid state for fault'
+      else if (!do_fraud)
+        expect_fault = 'no fault'
 
-      try {
-        await this.player2.game.fault(this.game_id) // TODO: should really store salt during attest...
-      } catch (e) {
-        console.warn(e.message)
-      }
+      await this.try(
+        this.player2.game.fault(this.game_id),
+        'fault: player 2 proving player 1 fraud moves',
+        expect_fault
+      )
     }
 
     // claim
-    try {
-      console.log('claim: time traveling...')
-      await fast_forward(101)
-  
-      console.log('claim: player 1 claiming reward')
-      if ((do_bail && do_slash) || (do_fraud && do_fault) || do_drop_round)
-        console.warn("(expect: 'invalid state for claim')")
-      else
-        console.log('(expect: claimed by: ..)')
+    console.log('claim: time traveling...')
+    await fast_forward(101)
 
-      await this.player1.game.claim(this.game_id)
-    } catch (e) {
-      console.warn(e.message)
-    }
+    let expect_claim = null
+    if ((do_bail && do_slash) || (do_fraud && do_fault) || do_drop_round)
+    expect_claim = 'invalid state for claim'
+
+    await this.try(
+      this.player1.game.claim(this.game_id),
+      'claim: player 1 claiming reward',
+      expect_claim
+    )
   }
 }
 
@@ -447,9 +469,9 @@ function get_config_string(scenario) {
     return ScenarioStrings[0]
 
   let scenarios = []
-  for (let i = 0; i < 4; i++) {
-    if ((scenario & (1<<i)) != 0)
-      scenarios.push(ScenarioStrings[1<<i])
+  for (let i = 0; i < Object.keys(ScenarioStrings).length - 1; i++) {
+    if ((scenario & (1 << i)) != 0)
+      scenarios.push(ScenarioStrings[1 << i])
   }
 
   return scenarios.join(', ')

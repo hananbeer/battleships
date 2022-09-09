@@ -65,13 +65,13 @@ contract Battleships {
     // about 3000-4500 seconds or roughly an hour
     uint256 immutable MIN_ATTESTATION_BLOCKS = 100;//00;
 
-    function _game_id() internal view returns (uint256) {
+    function game_id() public view returns (uint256) {
         return players[msg.sender].game_id;
     }
 
     function _game() internal view returns (Game storage) {
         // TODO: bound checks
-        return games[_game_id()];
+        return games[game_id()];
     }
 
     function _player() internal view returns (Player storage) {
@@ -149,11 +149,9 @@ contract Battleships {
         // and in play() the lower last_update_block player has the right to move next
         if (block.number - _opponent().last_update_block > MAX_BLOCKS_HIGH_AND_DRY) {
             //emit PlayerReadyAgainAfterStaleGame(..);
-            console.log("no start!");
             return false;
         }
 
-        console.log("start!!");
         player.missiles.push(coord);
         game.state = GameState.Started;
         game.start_block = block.number;
@@ -182,7 +180,7 @@ contract Battleships {
             // acks are indices to missiles that hit
             player.acks.push(uint8(opponent.missiles.length - 1));
             //uint8 opponent_coord = opponent.missiles[opponent.missiles.length - 1];
-            //emit MissileHit(_game_id(), opponent_coord);
+            //emit MissileHit(game_id(), opponent_coord);
 
             if (player.acks.length == MAX_SHIP_CELLS) {
                 // TODO: this should be public and up to player frontend to call, probably?
