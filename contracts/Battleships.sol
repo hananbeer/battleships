@@ -4,10 +4,6 @@ pragma solidity ^0.8.9;
 // Uncomment this line to use console.log
 import "hardhat/console.sol";
 
-/*library Coordinates {
-
-}*/
-
 contract Battleships {
     address public owner;
 
@@ -41,6 +37,8 @@ contract Battleships {
         uint256 attested_root;
         uint256 attested_salt;
         uint8[] attested_coords;
+
+        // TODO: allow configs such as board size (num cells = size x size), num ships, etc.
     }
 
     struct Player {
@@ -95,7 +93,7 @@ contract Battleships {
         players[msg.sender] = Player({
             game_id: game_id,
             board_merkle_root: board_merkle_root,
-            last_update_block: 0,
+            last_update_block: block.number,
             missiles: arr,
             acks: arr
         });
@@ -132,7 +130,7 @@ contract Battleships {
         //return game.player1;
     }
 
-    // for ease of use Open & Join accept merkle roots which may represent
+    // for ease of use open() & join() accept merkle roots which may represent
     // a random board state. while game hasn't started, allow players to
     // remix their board to their liking.
     function shuffle(uint256 board_merkle_root) public {
@@ -140,30 +138,28 @@ contract Battleships {
         _player().board_merkle_root = board_merkle_root;
     }
 
-    function start(uint8 coord) public {
+    function start(uint8 coord) public returns (bool started) {
         Game storage game = _game();
-        require(game.state < GameState.Started, "too late to shuffle");
+        require(game.state == GameState.Joined, "invalid state for start");
 
         Player storage player = _player();
-        if (player.missiles.length == 0)
-            player.missiles.push(coord);
-        else
-            player.missiles[0] = coord;
-
         player.last_update_block = block.number;
-        uint256 opponent_last_update_block = _opponent().last_update_block;
-        if (opponent_last_update_block == 0)
-            return;
-        
-        // technically not really needed since the last player to call Start()
+        // technically not really needed since the last player to call start()
         // will have their last_update_block be greater
-        // and in Play() the lower last_update_block player has the right to move next
-        if (block.number - opponent_last_update_block < MAX_BLOCKS_HIGH_AND_DRY) {
-            game.state = GameState.Started;
-            game.start_block = block.number;
-            //emit GameStarted(game_id(), block.number);
-            // both players may now call Play()
+        // and in play() the lower last_update_block player has the right to move next
+        if (block.number - _opponent().last_update_block > MAX_BLOCKS_HIGH_AND_DRY) {
+            //emit PlayerReadyAgainAfterStaleGame(..);
+            console.log("no start!");
+            return false;
         }
+
+        console.log("start!!");
+        player.missiles.push(coord);
+        game.state = GameState.Started;
+        game.start_block = block.number;
+        //emit GameStarted(game_id(), block.number, merkle_root1, merkle_root2);
+        // both players may now call Play()
+        return true;
     }
 
     // must be player's turn

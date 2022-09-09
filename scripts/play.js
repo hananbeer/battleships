@@ -202,6 +202,24 @@ async function fast_forward(blocks) {
   return Promise.all(txns)
 }
 
+const Scenario = {
+  normal:     0x00,
+  fraud:      0x01,
+  fault:      0x02,
+  bail:       0x04,
+  slash:      0x08,
+  drop_round: 0x10
+}
+
+const ScenarioStrings = {
+  0x00: 'normal',
+  0x01: 'fraud',
+  0x02: 'fault',
+  0x04: 'bail',
+  0x08: 'slash',
+  0x10: 'drop_round'
+}
+
 class Player {
   constructor(game_contract, signer, id) {
     this.id = id
@@ -210,19 +228,19 @@ class Player {
   }
 
   // TODO: remove need for first_shot
-  setup(ships, salt, first_shot=0x00) {
+  setup(ships, salt) {
     //console.log(`preparing player ${this.id} @ ${this.address}`)
     this.salt = salt
     this.ships = ships
     this.board = make_board(ships, salt)
     this.merkle = make_merkle_tree(this.board)
     this.merkle_root = this.merkle[0][0]
-    this.missiles = [first_shot]
+    this.missiles = []
     //console.log(`player ${this.id} merkle root: ${this.merkle_root}`)
   }
 
-  async start() {
-    return this.game.start(this.missiles[0])
+  last_shot() {
+    return this.missiles[this.missiles.length - 1]
   }
 
   async open() {
@@ -233,25 +251,20 @@ class Player {
     return this.game.join(game_id, this.merkle_root)
   }
 
-  async play(player_coord, opponent_coord) {
-    return this.game.play(player_coord, opponent_coord)
+  async start(missile_coord) {
+    this.missiles = []
+    if (missile_coord === undefined)
+      missile_coord = 0
+    else
+      this.missiles.push(missile_coord)
+
+    return this.game.start(missile_coord)
   }
-}
 
-const Scenario = {
-  normal:    0x00,
-  fraud:     0x01,
-  fault:     0x02,
-  bail:      0x04,
-  slash:     0x08
-}
-
-const ScenarioStrings = {
-  0x00: 'normal',
-  0x01: 'fraud',
-  0x02: 'fault',
-  0x04: 'bail',
-  0x08: 'slash'
+  async play(player_coord, opponent_ack) {
+    this.missiles.push(player_coord)
+    return this.game.play(player_coord, opponent_ack)
+  }
 }
 
 class GameSimulator {
@@ -269,26 +282,44 @@ class GameSimulator {
     this.player2 = new Player(this.contract, signer2, 2)
   }
 
+  async simulate_player1(round, do_fraud) {
+    // player 1 is sophisticated.
+    // he may or may not cheat.
+    // he got intel on ships.
+    // he obfuscates this fact by hitting only 50% of the time.
+    let m1 = (round % 2 != 0 ? ships2[round >> 1] : (ships2[round >> 1] + 11) & 0xff) // player 1 hits 50% of the time.
+
+    // TODO: get last missile from emitted event
+    let m2 = this.player2.last_shot()
+    let is_p2_hit = (this.player1.ships.indexOf(m2) != -1)
+    return this.player1.play(m1, do_fraud ? false : is_p2_hit) // player 1 may or may not cheat.
+  }
+
+  async simulate_player2(round, do_fraud) {
+    // player 2 is naive.
+    // he shoots in order.
+    // he always reports honestly.
+    // he also always loses.
+    let m2 = round + 1 // player 2 shoots in order.
+    let m1 = this.player1.last_shot()
+    let is_p1_hit = (this.player2.ships.indexOf(m1) != -1)
+    return this.player2.play(m2, is_p1_hit) // player 2 always honest.
+  }
+
   async simulate(scenario, verbose=false) {
     const do_fraud = ((scenario & Scenario.fraud) != 0)
     const do_fault = ((scenario & Scenario.fault) != 0)
     const do_slash = ((scenario & Scenario.slash) != 0)
     const do_bail = ((scenario & Scenario.bail) != 0)
+    const do_drop_round = ((scenario & Scenario.drop_round) != 0)
 
     const verbose_print = (verbose ? console.log : (x) => {})
 
     // setup
-    let missiles1 = [0x55]
-    let missiles2 = [0x00]
-
-    let m1 = missiles1[0]
-    let m2 = missiles2[0]
-
     const salt1 = 0x0
     const salt2 = 0x0
-
     this.player1.setup(ships1, salt1)
-    this.player2.setup(ships2, salt2, m2)
+    this.player2.setup(ships2, salt2)
 
     // open
     verbose_print('open: player 1 created new game room')
@@ -296,54 +327,29 @@ class GameSimulator {
     this.game_id++ // starts at -1
   
     // join
-    verbose_print('join: player 2 joined the game room')
+    verbose_print('join: player 2 joined the game room & ready')
     await this.player2.join(this.game_id)
   
     // TODO: test shuffle before & after start
   
     // start
-    verbose_print('start: player 1 ready')
-    await this.player1.start()
-    verbose_print('start: player 2 ready')
-    await this.player2.start() // TODO: player2 does not report missiles; should play() instead of start()...
+    verbose_print('start: player 1 start & fire first shot')
+    await this.player1.start(0x00)
   
     // play
     let promises = []
-    for (let i = 0; i < 39; i++) {
-      // player 1 is sophisticated.
-      // he may or may not cheat.
-      // he got intel on ships.
-      // he obfuscates this fact by hitting only 50% of the time.
-      m1 = (i % 2 == 0 ? ships2[i>>1] : (ships2[i>>1] + 11) & 0xff) // player 1 hits 50% of the time.
-      missiles1.push(m1)
-
+    // player 2 should make final round, and since player 1 made first move at start()
+    // play once for player 2 before the loop
+    promises.push(this.simulate_player2(0, false))
+    for (let i = 1; i < (do_drop_round ? 2 : 40); i++) {
+      promises.push(this.simulate_player1(i, do_fraud))
+      promises.push(this.simulate_player2(i, false))
       if (verbose) {
         console.log(`move ${i}: player 1`)
-        draw_board(ships1, missiles2)
-      }
-
-      // TODO: get last missile from emitted event
-      let is_p2_hit = (ships1.indexOf(m2) != -1)
-      promises.push(
-        this.player1.game.play(m1, do_fraud ? false : is_p2_hit) // player 1 may or may not cheat.
-      )
-  
-      // player 2 is naive.
-      // he shoots in order.
-      // he always reports honestly.
-      // he also always loses.
-      m2 = i + 1 // player 2 shoots in order.
-      missiles2.push(m2)
-
-      if (verbose) {
+        draw_board(this.player1.ships, this.player2.missiles)
         console.log(`move ${i}: player 2`)
-        draw_board(ships2, missiles1)
+        draw_board(this.player2.ships, this.player1.missiles)
       }
-
-      let is_p1_hit = (ships2.indexOf(m1) != -1)
-      promises.push(
-        this.player2.game.play(m2, is_p1_hit) // player 2 always honest.
-      )
     }
   
     await Promise.all(promises)
@@ -390,7 +396,7 @@ class GameSimulator {
     // attest
     try {
       console.log('attest: player 1 committed to tell the truth, the whole truth and nothing but the truth')
-      if (do_bail && do_slash)
+      if ((do_bail && do_slash) || do_drop_round)
         console.warn("(expect: 'invalid state for attest')")
 
       // NOTE: there's another type of fraud that can be tested here - providing incorrect salt
@@ -424,7 +430,7 @@ class GameSimulator {
       await fast_forward(101)
   
       console.log('claim: player 1 claiming reward')
-      if ((do_bail && do_slash) || (do_fraud && do_fault))
+      if ((do_bail && do_slash) || (do_fraud && do_fault) || do_drop_round)
         console.warn("(expect: 'invalid state for claim')")
       else
         console.log('(expect: claimed by: ..)')
@@ -468,6 +474,7 @@ async function main() {
 
   let scenarios = [
     Scenario.normal,                  // normal game
+    Scenario.drop_round,              // some rounds were "dropped" (think blockchain re-org)
     Scenario.fault,                   // illegal fault proof
     Scenario.fraud | Scenario.fault,  // legal fault proof
     Scenario.slash,                   // illegal slash
@@ -483,7 +490,7 @@ async function main() {
 
     let scenario = scenarios[i]
     console.log('next scenario to play:', get_config_string(scenario))
-    await game.simulate(scenario)
+    await game.simulate(scenario, false)
     console.log('previous scenario played:', get_config_string(scenario))
   }
 }
