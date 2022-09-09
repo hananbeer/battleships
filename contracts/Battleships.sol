@@ -208,7 +208,7 @@ contract Battleships {
     // must reveal board on-chain within 30 seconds or slash able
     function _end(uint8[] memory coords) internal {
         Game storage game = _game();
-        require(game.state == GameState.Started, "invalid end state");
+        require(game.state == GameState.Started, "invalid state for end");
 
         //console.log('GAME ENDED: unproved loser = %s', msg.sender);
         if (msg.sender == game.player2)
@@ -232,7 +232,7 @@ contract Battleships {
         Game storage game = _game();
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
-        require(game.state == GameState.Ended, "invalid attest state");
+        require(game.state == GameState.Ended, "invalid state for attest");
         game.state = GameState.Attested;
 
         Player storage player = _player();
@@ -300,10 +300,10 @@ contract Battleships {
     function fault(uint256 game_id) public {
         // loosely-related check of whether caller is fault maker (attester) or fault prover
         // TODO: try to find better signal for fault detection?
-        require(_player().acks.length == MAX_SHIP_CELLS, "not attester");
+        //require(_player().acks.length == MAX_SHIP_CELLS, "not not-attester");
 
         Game storage game = games[game_id];
-        require(game.state == GameState.Attested, "invalid fault state");
+        require(game.state == GameState.Attested, "invalid state for fault");
         game.state = GameState.Faulted;
 
         Player storage opponent = _opponent();
@@ -329,13 +329,14 @@ contract Battleships {
         //revert("unimplemented");
     }
 
+    // TODO: add game config to require fault() before claim()
     function claim(uint256 game_id) public {
         require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS, "premature claim");
 
         Game storage game = games[game_id];
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
-        require(game.state == GameState.Attested, "invalid game state");
+        require(game.state == GameState.Attested, "invalid state for claim");
         game.state = GameState.Claimed;
 
         // TODO: claim here
@@ -347,12 +348,12 @@ contract Battleships {
     // slash if opponent hasn't played for long period
     function slash() public {
         uint256 opponent_last_update_block = _opponent().last_update_block;
-        require(_player().last_update_block > opponent_last_update_block, "not your turn");
-        require(block.number - opponent_last_update_block > MAX_BLOCKS_HIGH_AND_DRY, "not slashable");
+        require(_player().last_update_block > opponent_last_update_block, "cannot slash during your turn");
+        require(block.number - opponent_last_update_block > MAX_BLOCKS_HIGH_AND_DRY, "not yet slashable");
 
         Game storage game = _game();
         // TODO: should allow slashing in other states?
-        require(game.state == GameState.Started || game.state == GameState.Ended, "invalid slash state");        
+        require(game.state == GameState.Started || game.state == GameState.Ended, "invalid state for slash");        
         game.state = GameState.Slashed;
 
         // TODO: slash here

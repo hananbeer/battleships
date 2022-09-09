@@ -202,148 +202,298 @@ function test_merkle(num_samples=5) {
   return true
 }
 
-const gc = 5 // game_config in range 0..7
+class Player {
+  constructor(game_contract, signer, id) {
+    this.id = id
+    this.game = game_contract.connect(signer)
+    this.address = signer.address
+  }
 
-const do_fraud = ((gc & 1) != 0) //false //true
-const do_slash = ((gc & 2) != 0) //false //true
-const do_fault = ((gc & 4) != 0) //true //false
+  // TODO: remove need for first_shot
+  setup(ships, salt, first_shot) {
+    //console.log(`preparing player ${this.id} @ ${this.address}`)
+    this.salt = salt
+    this.ships = ships
+    this.board = make_board(ships, salt)
+    this.merkle = make_merkle_tree(this.board)
+    this.merkle_root = this.merkle[0][0]
+    this.missiles = [first_shot]
+    //console.log(`player ${this.id} merkle root: ${this.merkle_root}`)
+  }
+
+  async start() {
+    return this.game.start(this.missiles[0])
+  }
+
+  async open() {
+    return this.game.open(this.merkle_root)
+  }
+
+  async join(game_id) {
+    return this.game.join(game_id, this.merkle_root)
+  }
+
+  async play(player_coord, opponent_coord) {
+    return this.game.play(player_coord, opponent_coord)
+  }
+}
+
+const Scenario = {
+  normal: 0,
+  fraud: 1,
+  fault: 2,
+  bail: 4,
+  slash: 8,
+}
+
+const ScenarioStrings = {
+  0: 'normal',
+  1: 'fraud',
+  2: 'fault',
+  4: 'bail',
+  8: 'slash',
+}
+
+class GameSimulator {
+  async deploy() {
+    this.game_id = -1
+
+    const Factory = await hre.ethers.getContractFactory("Battleships")
+    this.contract = await Factory.deploy()
+  
+    return this.contract.deployed()
+  }
+
+  setup(signer1, signer2) {
+    this.player1 = new Player(this.contract, signer1, 1)
+    this.player2 = new Player(this.contract, signer2, 2)
+  }
+
+  async simulate(scenario, verbose=false) {
+    const do_fraud = ((scenario & Scenario.fraud) != 0)
+    const do_fault = ((scenario & Scenario.fault) != 0)
+    const do_slash = ((scenario & Scenario.slash) != 0)
+    const do_bail = ((scenario & Scenario.bail) != 0)
+
+    const verbose_print = (verbose ? console.log : (x) => {})
+
+    // setup
+    let missiles1 = [0x55]
+    let missiles2 = [0x00] // first missile shot at 0x00 (important for testing)
+
+    let m1 = missiles1[0]
+    let m2 = missiles2[0]
+
+    const salt1 = 0x100
+    const salt2 = 0x200
+
+    this.player1.setup(ships1, salt1, m1)
+    this.player2.setup(ships2, salt2, m2)
+
+    // open
+    verbose_print('open: player 1 created new game room')
+    await this.player1.open()
+    this.game_id++ // starts at -1
+  
+    // join
+    verbose_print('join: player 2 joined the game room')
+    await this.player2.join(this.game_id)
+  
+    // TODO: test shuffle before & after start
+  
+    // start
+    verbose_print('start: player 1 ready')
+    await this.player1.start()
+    verbose_print('start: player 2 ready')
+    await this.player2.start() // TODO: player2 does not report missiles; should play() instead of start()...
+  
+    // play
+    let promises = []
+    for (let i = 0; i < 39; i++) {
+      // player 1 is sophisticated.
+      // he may or may not cheat.
+      // he got intel on ships.
+      // he obfuscates this fact by hitting only 50% of the time.
+      m1 = (i % 2 == 0 ? ships2[i>>1] : (ships2[i>>1] + 11) & 0xff) // player 1 hits 50% of the time.
+      missiles1.push(m1)
+
+      if (verbose) {
+        console.log(`move ${i}: player 1`)
+        draw_board(ships1, missiles2)
+      }
+
+      let is_p2_hit = (ships1.indexOf(m2) != -1)
+      promises.push(
+        this.player1.game.play(m1, do_fraud ? false : is_p2_hit) // player 1 may or may not cheat.
+      )
+  
+      // player 2 is naive.
+      // he shoots in order.
+      // he always reports honestly.
+      // he also always loses.
+      m2 = i + 1 // player 2 shoots in order.
+      missiles2.push(m2)
+
+      if (verbose) {
+        console.log(`move ${i}: player 2`)
+        draw_board(ships2, missiles1)
+      }
+
+      let is_p1_hit = (ships2.indexOf(m1) != -1)
+      promises.push(
+        this.player2.game.play(m2, is_p1_hit) // player 2 always honest.
+      )
+
+    }
+  
+    await Promise.all(promises)
+  
+    // end
+    // _end() was called by last play() of player2 which is playing honest
+  
+    // -- finale --
+    // slash
+    if (do_slash) {
+      try {
+        console.log('slash: player 1 trying to slash illegaly during their own turn')
+        console.warn("(expect: 'cannot slash during your turn')")
+        await this.player1.game.slash()
+      } catch (e) {
+        console.warn(e.message)
+      }
+  
+      // player2 played last by reporting loss and ending game
+      // hence player2 may slash player1 (if slashing conditions met)
+      if (do_bail) {
+        console.log('bail: time traveling...')
+        for (let i = 0; i < 101; i++)
+          await hre.network.provider.send('evm_mine', [])
+    
+        try {
+          console.log('slash: player 2 trying slash legally')
+          console.log('(expect: slashed by ..)')
+          await this.player2.game.slash()
+        } catch (e) {
+          console.warn(e.message)
+        }
+      } else {
+        try {
+          console.log('slash: player 2 trying slash prematurely')
+          console.warn("(expect: 'not yet slashable')")
+          await this.player2.game.slash()
+        } catch (e) {
+          console.warn(e.message)
+        }
+      }
+    }
+  
+    // attest
+    try {
+      console.log('attest: player 1 committed to tell the truth, the whole truth and nothing but the truth')
+      if (do_bail && do_slash)
+        console.warn("(expect: 'invalid state for attest')")
+
+      await this.player1.game.attest(this.player1.ships, this.player1.salt ^ (do_fraud ? 1 : 0))
+    } catch (e) {
+      console.warn(e.message)
+    }
+
+    // fault
+    if (do_fault) {
+      console.log('fault: player 2 proving player 1 fraud moves')
+      if (do_fraud) {
+        if (do_bail && do_slash)
+          console.warn("(expect: 'invalid state for fault')")
+        else
+          console.log('(expect: fault proved by: ..)')
+      } else {
+        console.warn("(expect: 'no fault')")
+      }
+
+      try {
+        await this.player2.game.fault(this.game_id) // TODO: should really store salt during attest...
+      } catch (e) {
+        console.warn(e.message)
+      }
+    }
+
+    // claim
+    try {
+      console.log('claim: time traveling...')
+      for (let i = 0; i < 101; i++)
+        await hre.network.provider.send('evm_mine', [])
+  
+      console.log('claim: player 1 claiming reward')
+      if ((do_bail && do_slash) || (do_fraud && do_fault))
+        console.warn("(expect: 'invalid state for claim')")
+      else
+        console.log('(expect: claimed by: ..)')
+
+      await this.player1.game.claim(this.game_id)
+    } catch (e) {
+      console.warn(e.message)
+    }
+  }
+}
+
+function get_config_string(scenario) {
+  if (scenario == 0)
+    return ScenarioStrings[0]
+
+  let scenarios = []
+  for (let i = 0; i < 4; i++) {
+    if ((scenario & (1<<i)) != 0)
+      scenarios.push(ScenarioStrings[1<<i])
+  }
+
+  return scenarios.join(', ')
+}
 
 async function main() {
   // test_merkle(500)
   // return
 
+  // setup
   let signers = await hre.ethers.getSigners()
   if (signers.length < 2) {
     console.warn('required at least 2 accounts (signers) to play')
     return
   }
 
-  console.log('deploying game')
-  const Factory = await hre.ethers.getContractFactory("Battleships")
-  const game = await Factory.deploy()
-  await game.deployed()
-  console.log('deployed: ', game.address)
+  let game = new GameSimulator()
 
-  // setup
-  console.log('preparing game...')
-  let player1 = game.connect(signers[0])
-  let player2 = game.connect(signers[1])
-  console.log('player 1:', player1.signer.address)
-  console.log('player 2:', player2.signer.address)
+  console.log('deploying game...')
+  await game.deploy()
+  console.log('deployed:', game.contract.address)
 
-  const salt1 = 0x100
-  const salt2 = 0x200
-  const board1 = make_board(ships1, salt1)
-  const board2 = make_board(ships2, salt2)
-  const merkle1 = make_merkle_tree(board1)
-  const merkle2 = make_merkle_tree(board2)
-  const root1 = merkle1[0][0]
-  const root2 = merkle2[0][0]
-  console.log('player 1 merkle root:', root1)
-  console.log('player 2 merkle root:', root2)
+  let scenarios = [
+    // Scenario.normal,                  // normal game
+    // Scenario.fault,                   // illegal fault proof
+    // Scenario.fraud | Scenario.fault,  // legal fault proof
+    // Scenario.slash,                   // illegal slash
+    // Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
+    // Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
+    Scenario.fraud | Scenario.fault | Scenario.bail | Scenario.slash, // all hell breaks loose
+  ]
 
-  let missiles1 = [0x55]
-  let missiles2 = [0x00] // first missile shot at 0x00 (important for testing)
+  for (let i = 0; i < scenarios.length; i++) {
+    console.log('\n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n')
 
-  const game_id = 0
+    game.setup(signers[0], signers[1])
 
-  // open
-  console.log('open: player 1 created new game room')
-  await player1.open(root1)
-
-  // join
-  console.log('join: player 2 joined the game room')
-  await player2.join(game_id, root2)
-
-  // TODO: test shuffle before & after start
-
-  // start
-  let m1 = missiles1[0]
-  let m2 = missiles2[0]
-  console.log('start: player 1 ready')
-  await player1.start(m1)
-  console.log('start: player 2 ready')
-  await player2.start(m2) // TODO: player2 does not report missiles; should play() instead of start()...
-
-  // play
-  for (let i = 0; i < 39; i++) {
-    // player 1 is sophisticated.
-    // he may or may not cheat.
-    // he got intel on ships.
-    // he obfuscates this fact by hitting only 50% of the time.
-    console.log(`move ${i}: player 1`)
-    m1 = (i % 2 == 0 ? ships2[i>>1] : (ships2[i>>1] + 11) & 0xff) // player 1 hits 50% of the time.
-    missiles1.push(m1)
-    draw_board(ships1, missiles2)
-    let is_p2_hit = (ships1.indexOf(m2) != -1)
-    await player1.play(m1, do_fraud ? false : is_p2_hit) // player 1 may or may not cheat.
-
-    // player 2 is naive.
-    // he shoots in order.
-    // he always reports honestly.
-    // he also always loses.
-    console.log(`move ${i}: player 2`)
-    m2 = i + 1 // player 2 shoots in order.
-    missiles2.push(m2)
-    draw_board(ships2, missiles1)
-    let is_p1_hit = (ships2.indexOf(m1) != -1)
-    await player2.play(m2, is_p1_hit) // player 2 always honest.
-
-    //await sleep(500)
-  }
-
-  //await sleep(1500)
-
-  // end
-  // _end() was called by last play() of player2 which is playing honest
-
-  // -- finale --
-  if (do_slash) {
-    // slash
-    console.log('slash: time traveling...')
-    for (let i = 0; i < 101; i++)
-      await hre.network.provider.send('evm_mine', [])
-
-    // player2 played last by reporting loss and ending game
-    // hence player2 may slash player1 (if slashing conditions met)
-    const invalid_slash = true
-    console.log('slash: performing ' + (invalid_slash ? 'invalid' : 'valid') + ' slash')
-    if (invalid_slash)
-      await player1.slash()
-    else
-      await player2.slash()
-  } else {
-    // attest
-    console.log('attest: player 1 committed to tell the truth, the whole truth and nothing but the truth')
-    await player1.attest(ships1, do_fraud ? salt1+1 : salt1)
-
-    if (do_fault) {
-      // fault
-      console.log('fault: player 2 proving player 1 fraud moves')
-      await player2.fault(game_id) // TODO: should really store salt during attest...
-    } else {
-      // claim
-      console.log('claim: time traveling...')
-      for (let i = 0; i < 101; i++)
-        await hre.network.provider.send('evm_mine', [])
-
-      console.log('claim: player 1 claiming reward')
-      await player1.claim(game_id)
-    }
+    let scenario = scenarios[i]
+    console.log('next scenario to play:', get_config_string(scenario))
+    await game.simulate(scenario)
+    console.log('previous scenario played:', get_config_string(scenario))
   }
 }
 
-function print_config() {
-  console.log('game config:')
-  console.log(`do_fraud: ${do_fraud} | do_slash: ${do_slash} | do_fault: ${do_fault}`)
-}
-
-print_config()
+//print_config()
 main().catch((error) => {
   console.error(error)
   process.exitCode = 1
 })
 .then(() => {
-  print_config()
+  //print_config()
   console.log('done!')
 })
