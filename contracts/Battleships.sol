@@ -14,6 +14,8 @@ contract Battleships {
     receive() external payable {
     }
 
+    event GameStateUpdate(uint256 indexed game_id, uint256 indexed state, address indexed player);
+
     enum GameState {
         None,     // no game
         Open,     // player 1 opened room
@@ -99,6 +101,28 @@ contract Battleships {
         });
     }
 
+    function _set_state(GameState state) internal {
+        Game storage game = _game();
+        game.state = state;
+        emit GameStateUpdate(game.id, uint256(state), msg.sender);
+    }
+
+    function last_opponent_missile() public view returns (uint256) {
+        Player storage opponent = _opponent();
+        require(opponent.missiles.length > 0, "no missiles");
+        return opponent.missiles[opponent.missiles.length - 1];
+    }
+
+    function last_opponent_ack() public view returns (uint8) {
+        Player storage opponent = _opponent();
+        require(opponent.acks.length > 0, "no acknowledgment");
+        return opponent.acks[opponent.acks.length - 1];
+    }
+
+    function game_state() public view returns (GameState) {
+        return _game().state;
+    }
+
     // called by player 1
     function open(uint256 board_merkle_root) public returns (uint256) {
         uint256 game_id = games.length;
@@ -124,7 +148,7 @@ contract Battleships {
         Game storage game = games[game_id];
         require(game.player1 != address(0x0), "room not open");
         require(game.player2 == address(0x0), "room full");
-        game.state = GameState.Joined; // note no state check because game.player2 == 0 is kind of the check
+        _set_state(GameState.Joined); // note no state check because game.player2 == 0 is kind of the check
         game.player2 = msg.sender;
         _init_player(game_id, board_merkle_root);
         //return game.player1;
@@ -153,7 +177,7 @@ contract Battleships {
         }
 
         player.missiles.push(coord);
-        game.state = GameState.Started;
+        _set_state(GameState.Started);
         game.start_block = block.number;
         //emit GameStarted(game_id(), block.number, merkle_root1, merkle_root2);
         // both players may now call Play()
@@ -183,10 +207,13 @@ contract Battleships {
             //emit MissileHit(game_id(), opponent_coord);
 
             if (player.acks.length == MAX_SHIP_CELLS) {
-                // TODO: this should be public and up to player frontend to call, probably?
-                // (it's probably cleaner code too; it also allows any player to forfeit at any time)
-                // also presents a nice idea: modular logic where one game scenario forfeit is allowed
-                _end(player.acks);
+                if (msg.sender == game.player2)
+                    console.log("player 1 wins - proof required");
+                else
+                    console.log("player 2 wins - proof required");
+
+                // not attempting to prove loser; forging loss will be treated as forfeit
+                _set_state(GameState.Ended);
                 // early return as this is an ack-only for the end game. (missile coord is ignored)
                 // it should be generated automatically by frontend
                 // but if not, player will be slashable or faulted
@@ -196,29 +223,12 @@ contract Battleships {
         }
 
         player.missiles.push(coord);
+        // update game state (cheaper than _set_state)
+        emit GameStateUpdate(game.id, uint256(GameState.Started), msg.sender);
     }
 
-    event EndGame(uint256 indexed game_id, address player, uint8[] coords);
-
-    // must reveal board on-chain within 30 seconds or slash able
-    function _end(uint8[] memory coords) internal {
-        Game storage game = _game();
-        require(game.state == GameState.Started, "invalid state for end");
-
-        //console.log('GAME ENDED: unproved loser = %s', msg.sender);
-        if (msg.sender == game.player2)
-            console.log("player 1 wins - proof required");
-        else
-            console.log("player 2 wins - proof required");
-
-        // not attempting to prove loser; forging loss will be treated as forfeit
-        emit EndGame(game.id, msg.sender, coords);
-        game.state = GameState.Ended;
-    }
-    
     // TODO: replace all coords with bytes20 (as long as using 20 ship cells; or bytes32/uint256)
     function attest(uint8[] calldata coords, uint32 salt) public {
-        // TODO: store salt somewhere
         // TODO: only report remaining coords
         // TODO: try to verify coords reported were indeed the ships hit & in order!
         // TODO: idea: store ship id below salt (instead of just 0/1)
@@ -228,7 +238,7 @@ contract Battleships {
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Ended, "invalid state for attest");
-        game.state = GameState.Attested;
+        _set_state(GameState.Attested);
 
         // only winner can attest the game
         require(_opponent().acks.length == MAX_SHIP_CELLS, "not winner");
@@ -313,7 +323,7 @@ contract Battleships {
     function fault(uint256 game_id) public {
         Game storage game = games[game_id];
         require(game.state == GameState.Attested, "invalid state for fault");
-        game.state = GameState.Faulted;
+        _set_state(GameState.Faulted);
 
         Player storage opponent = _opponent();
         // loosely-related check of whether caller is fault maker (attester) or fault prover
@@ -345,11 +355,14 @@ contract Battleships {
     function claim(uint256 game_id) public {
         require(block.number - _player().last_update_block > MIN_ATTESTATION_BLOCKS, "premature claim");
 
+        if (game_id == 2**256-1)
+            game_id = get_game_id();
+
         Game storage game = games[game_id];
         // TODO: create ERC20 tokens on testnet
         // which can be bridged for ETH on arbitrum/mainnet
         require(game.state == GameState.Attested, "invalid state for claim");
-        game.state = GameState.Claimed;
+        _set_state(GameState.Claimed);
 
         // TODO: claim here
         console.log("claimed by: %s", msg.sender);
@@ -365,12 +378,10 @@ contract Battleships {
         Game storage game = _game();
         // TODO: should allow slashing in other states?
         require(game.state == GameState.Started || game.state == GameState.Ended, "invalid state for slash");        
-        game.state = GameState.Slashed;
+        _set_state(GameState.Slashed);
 
         // TODO: slash here
         console.log("slashed by: %s", msg.sender);
-
-        //emit GameSlashed();
     }
 }
 

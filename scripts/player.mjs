@@ -11,7 +11,7 @@ export default class Player {
   setup(ships, salt) {
     //console.log(`preparing player ${this.id} @ ${this.address}`)
     if (!salt)
-      salt = Math.random() * 0x7fffff
+      salt = parseInt(Math.random() * 0x7fffff)
 
     this.salt = salt
     this.ships = ships
@@ -48,9 +48,16 @@ export default class Player {
     return this.game.start(missile_coord)
   }
 
+  async game_state() {
+    return this.game.callStatic.game_state()
+  }
+
   async play(player_coord, opponent_ack) {
     this.missiles.push(player_coord)
-    return this.game.play(player_coord, opponent_ack)
+    await this.game.play(player_coord, opponent_ack)
+
+    let game_state = await this.game_state()
+    return (game_state == 3)
   }
 
   async slash() {
@@ -66,6 +73,9 @@ export default class Player {
   }
 
   async claim(game_id) {
+    if (!game_id)
+      game_id = '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
+
     return this.game.claim(game_id)
   }
 }

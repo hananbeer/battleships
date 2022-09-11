@@ -1,9 +1,11 @@
+console.log('initializing...')
+
 import hre from 'hardhat'
-import * as readline from 'node:readline'
+import * as readline from 'readline'
 import { stdin as input, stdout as output } from 'node:process'
 const rl = readline.createInterface({ input, output })
 
-import { draw_board } from './utils.mjs'
+import { draw_board, fast_forward } from './utils.mjs'
 import Player from './player.mjs'
 
 function random_coord() {
@@ -11,11 +13,13 @@ function random_coord() {
 }
 
 let computer_ships = []
+const strict_size = 5
 for (let i = 0; i < 0x100; i++) {
-  computer_ships.push(i)
+  if ((i & 0x0f) < strict_size && (i & 0xf0) < (strict_size << 4))
+    computer_ships.push(i)
 }
 computer_ships = computer_ships.sort(() => Math.random() - 0.5).slice(0, 20)
-draw_board(computer_ships)
+//draw_board(player_ships)
 
 const player_ships = [
   0x11, 0x12,                   // B2-C2 destroyer
@@ -42,7 +46,7 @@ let computer = new Player(game, signers[0])
 computer.setup(computer_ships)
 
 let player = new Player(game, signers[1])
-player.setup(computer_ships)
+player.setup(player_ships)
 
 console.log('making room...')
 await computer.open()
@@ -53,16 +57,87 @@ await player.join(0)
 console.log('first shot...')
 await computer.start(random_coord())
 
-rl.on('line', async (coord) => {
-  console.log('shooting:', coord)
-  coord = parseInt(coord, 16)
-  let pres = await player.play(coord, player.ack(computer.last_shot()))
+let user_visible_ships = []
 
-  let computer_coord = random_coord()
-  let cres = await computer.play(computer_coord, computer.ack(player.last_shot()))
-  
+let GameStates = {
+  0: 'None',     // no game
+  1: 'Open',     // player 1 opened room
+  2: 'Joined',   // player 2 joined player 1 (one or neither requested to start)
+  3: 'Started',  // both players started game
+  4: 'Ended',    // first player to report loss
+  5: 'Attested', // winner attested their board
+  6: 'Slashed',  // afk player slashed, game is sealed and no further actions can be taken
+  7: 'Faulted',  // player proved fault, game is sealed and no further actions can be taken
+  8: 'Claimed'   // winner claimed funds, game is sealed and no further actions can be taken
+}
+
+console.log('play:')
+
+let lines = [
+  '00','01','02','03','04',
+  '10','11','12','13','14',
+  '20','21','22','23','24',
+  '30','31','32','33','34',
+  '40','41','42','43','44'
+]
+const simulate_win = false
+while (lines.length > 0) {
+  //let line = await ask()
+  let line = lines.pop()
+  let coord = parseInt(line, 16)
+  if (isNaN(coord)) {
+    console.log('bad input. try again')
+    continue
+  }
+
+  if (coord < 0 || coord > 0x100) {
+    console.log('out of bounds. be nice')
+    continue
+  }
+
+  if (player.missiles.indexOf(coord) != -1) {
+    console.log('already shot. choose new')
+    continue
+  }
+
+  //rl.pause()
+
+  console.log('shooting:', coord.toString(16).padStart(2, '0'))
+  let move_success = await player.play(coord, player.ack(computer.last_shot()))
+  if (!move_success) {
+    console.log('* YOU LOSE :( *')
+
+    console.log('attesting game...')
+    await computer.attest()
+    console.log('waiting for unlock...')
+    await fast_forward(101)
+    console.log('claiming...')
+    await computer.claim()
+    console.log('reward claimed!')
+    break
+  }
+
+  let computer_coord = (simulate_win ? random_coord() : player_ships[24 - lines.length])
+  move_success = await computer.play(computer_coord, computer.ack(player.last_shot()))
+  if (computer.ack(player.last_shot()))
+    user_visible_ships.push(player.last_shot())
   //draw_board(player_ships, computer.missiles)
-  draw_board(computer_ships, player.missiles)
+  draw_board(user_visible_ships, player.missiles)
+  if (!move_success) {
+    console.log('* * * YOU WIN!!! * * *')
+    console.log('attesting game...')
+    await player.attest()
+    console.log('waiting for unlock...')
+    await fast_forward(101)
+    console.log('claiming...')
+    await player.claim()
+    console.log('reward claimed!')
+    break
+  }
+
   console.log('computer played:', computer_coord.toString(16).padStart(2, '0'))
-})
+  //rl.resume()
+}
+
+console.log('done!')
 
