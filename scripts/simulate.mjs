@@ -1,6 +1,6 @@
 import hre from 'hardhat'
 import Player from './player.mjs'
-import { fast_forward, sleep } from './utils.mjs'
+import { fast_forward, draw_board, sleep } from './utils.mjs'
 
 const TEST_SALT_FRAUD = false
 
@@ -159,6 +159,8 @@ class GameSimulator {
         draw_board(this.player1.ships, this.player2.missiles)
         console.log(`move ${i}: player 2`)
         draw_board(this.player2.ships, this.player1.missiles)
+        if (scenario == 0)
+          await sleep(i < 10 ? 1500 : 50)
       }
     }
   
@@ -254,11 +256,11 @@ async function run_tests() {
   let scenarios = [
     Scenario.normal,                  // normal game
     Scenario.drop_round,              // some rounds were "dropped" (think blockchain re-org)
-    Scenario.fault,                   // illegal fault proof
+    // Scenario.fault,                   // illegal fault proof
     Scenario.fraud | Scenario.fault,  // legal fault proof
     Scenario.slash,                   // illegal slash
     Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
-    Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
+    // Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
     Scenario.fraud | Scenario.fault | Scenario.bail | Scenario.slash, // all hell breaks loose
   ]
 
@@ -269,7 +271,7 @@ async function run_tests() {
 
     let scenario = scenarios[i]
     console.log('next scenario to play:', get_config_string(scenario))
-    await simulator.simulate(scenario, false)
+    await simulator.simulate(scenario, true)
     console.log('previous scenario played:', get_config_string(scenario))
   }
 }

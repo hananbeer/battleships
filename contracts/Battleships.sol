@@ -91,13 +91,13 @@ contract Battleships {
     }
 
     function _init_player(uint256 game_id, uint256 board_merkle_root) internal {
-        uint8[] memory arr;
+        uint8[] memory empty;
         players[msg.sender] = Player({
             game_id: game_id,
             board_merkle_root: board_merkle_root,
             last_update_block: block.number,
-            missiles: arr,
-            acks: arr
+            missiles: empty,
+            acks: empty
         });
     }
 
@@ -148,9 +148,9 @@ contract Battleships {
         Game storage game = games[game_id];
         require(game.player1 != address(0x0), "room not open");
         require(game.player2 == address(0x0), "room full");
-        _set_state(GameState.Joined); // note no state check because game.player2 == 0 is kind of the check
-        game.player2 = msg.sender;
         _init_player(game_id, board_merkle_root);
+        game.player2 = msg.sender;
+        _set_state(GameState.Joined); // note no state check because game.player2 == 0 is kind of the check
         //return game.player1;
     }
 
