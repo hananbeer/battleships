@@ -103,8 +103,8 @@ class GameSimulator {
     const verbose_print = (verbose ? console.log : (x) => {})
 
     const ships1 = [
-      0x11, 0x21,                   // B2-C2 destroyer
-      0x23,                         // C4    submarine
+      0x11, 0x21,                   // B2-C2
+      0x23,                         // C4
       0x44, 0x45,                   // E4-E5
       0x63, 0x64, 0x65,             // G3-G5
       0x71,                         // I2
@@ -114,8 +114,8 @@ class GameSimulator {
     ]
 
     const ships2 = [
-      0x11, 0x12,                   // B2-C2 destroyer
-      0x32,                         // C4    submarine
+      0x11, 0x12,                   // B2-C2
+      0x32,                         // C4
       0x44, 0x54,                   // E4-E5
       0x36, 0x46, 0x56,             // G3-G5
       0x17,                         // I2
@@ -132,15 +132,13 @@ class GameSimulator {
     this.player2.setup(ships2, salt2)
 
     // open
-    verbose_print('open: player 1 created new game room')
+    verbose_print('open: player 1 creates new game room')
     await this.player1.open()
     this.game_id++ // starts at -1
   
     // join
-    verbose_print('join: player 2 joined the game room & ready')
+    verbose_print('join: player 2 joins the game room & ready')
     await this.player2.join(this.game_id)
-  
-    // TODO: test shuffle before & after start
   
     // start
     verbose_print('start: player 1 start & fire first shot')
@@ -154,23 +152,18 @@ class GameSimulator {
     for (let i = 1; i < (do_drop_round ? 2 : 40); i++) {
       promises.push(this.simulate_player1(i, do_fraud))
       promises.push(this.simulate_player2(i, false))
-      if (verbose) {
-        console.log(`move ${i}: player 1`)
-        draw_board(this.player1.ships, this.player2.missiles)
+      if (verbose && scenario == 0) {
+        // console.log(`move ${i}: player 1`)
+        // draw_board(this.player1.ships, this.player2.missiles)
         console.log(`move ${i}: player 2`)
         draw_board(this.player2.ships, this.player1.missiles)
-        if (scenario == 0)
-          await sleep(i < 10 ? 1500 : 50)
+        //if (scenario == 0)
+        //await sleep(i < 10 ? 2500 : 50)
       }
     }
   
     await Promise.all(promises)
   
-    // end
-    // _end() was called by last play() of player2 which is playing honest
-  
-    // -- finale --
-
     // slash
     if (do_slash) {
       await this.try(
@@ -255,11 +248,11 @@ async function run_tests() {
 
   let scenarios = [
     Scenario.normal,                  // normal game
-    Scenario.drop_round,              // some rounds were "dropped" (think blockchain re-org)
+    // Scenario.drop_round,              // some rounds were "dropped" (think blockchain re-org)
     // Scenario.fault,                   // illegal fault proof
     Scenario.fraud | Scenario.fault,  // legal fault proof
     Scenario.slash,                   // illegal slash
-    Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
+    // Scenario.bail | Scenario.slash,   // legal slash (always check incorrect player slash too)
     // Scenario.bail | Scenario.fraud,   // player 1 is cheating & was AFK long time but player 2 did not report
     Scenario.fraud | Scenario.fault | Scenario.bail | Scenario.slash, // all hell breaks loose
   ]

@@ -15,7 +15,7 @@ export async function fast_forward(blocks) {
 
 export async function deploy_contract(name) {
   const Factory = await hre.ethers.getContractFactory(name)
-  contract = await Factory.deploy()
+  let contract = await Factory.deploy()
 
   return contract.deployed()
 }
