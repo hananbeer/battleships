@@ -2,7 +2,7 @@
 pragma solidity ^0.8.9;
 
 // Uncomment this line to use console.log
-import "hardhat/console.sol";
+//import "hardhat/console.sol";
 
 contract Battleships {
     address public owner;
@@ -62,7 +62,7 @@ contract Battleships {
 
     // about 30-45 seconds window on arbitrum
     // used to make sure no player is AFK while another tries to join
-    uint256 immutable MAX_BLOCKS_HIGH_AND_DRY = 100;
+    uint256 immutable MAX_BLOCKS_HIGH_AND_DRY = 100000;
 
     // about 3000-4500 seconds or roughly an hour
     uint256 immutable MIN_ATTESTATION_BLOCKS = 100;//00;
@@ -86,6 +86,24 @@ contract Battleships {
             return players[game.player2];
         else if (game.player2 == msg.sender)
             return players[game.player1];
+        else
+            revert("no opponent");
+    }
+
+    function get_missiles(address player) public view returns (uint8[] memory) {
+        return players[player].missiles;
+    }
+
+    function get_acks(address player) public view returns (uint8[] memory) {
+        return players[player].acks;
+    }
+
+    function get_opponent_address() public view returns (address) {
+        Game storage game = _game();
+        if (game.player1 == msg.sender)
+            return game.player2;
+        else if (game.player2 == msg.sender)
+            return game.player1;
         else
             revert("no opponent");
     }
@@ -124,7 +142,7 @@ contract Battleships {
     }
 
     // called by player 1
-    function open(uint256 board_merkle_root) public returns (uint256) {
+    function open(uint256 board_merkle_root) public {
         uint256 game_id = games.length;
         uint8[] memory empty;
 
@@ -140,7 +158,7 @@ contract Battleships {
         ));
 
         _init_player(game_id, board_merkle_root);
-        return game_id;
+        emit GameStateUpdate(game_id, uint256(GameState.Open), msg.sender); // TODO: 
     }
 
     // called by player 2
@@ -207,10 +225,12 @@ contract Battleships {
             //emit MissileHit(game_id(), opponent_coord);
 
             if (player.acks.length == MAX_SHIP_CELLS) {
+                /*
                 if (msg.sender == game.player2)
                     console.log("player 1 wins - proof required");
                 else
                     console.log("player 2 wins - proof required");
+                */
 
                 // not attempting to prove loser; forging loss will be treated as forfeit
                 _set_state(GameState.Ended);
@@ -346,7 +366,7 @@ contract Battleships {
         }
 
         // TODO: prove fault here
-        console.log("fault proved by: %s", msg.sender);
+        //console.log("fault proved by: %s", msg.sender);
 
         //emit GameFault(game.id, msg.sender);
     }
@@ -365,7 +385,7 @@ contract Battleships {
         _set_state(GameState.Claimed);
 
         // TODO: claim here
-        console.log("claimed by: %s", msg.sender);
+        //console.log("claimed by: %s", msg.sender);
         //emit GameClaimed(..);
     }
 
@@ -381,7 +401,7 @@ contract Battleships {
         _set_state(GameState.Slashed);
 
         // TODO: slash here
-        console.log("slashed by: %s", msg.sender);
+        //console.log("slashed by: %s", msg.sender);
     }
 }
 

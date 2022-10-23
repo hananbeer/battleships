@@ -53,6 +53,10 @@ export default class Player {
   }
 
   async play(player_coord, opponent_ack) {
+    if (opponent_ack === undefined) {
+      let last_missile_coord = await this.game.last_opponent_missile()
+      opponent_ack = (this.ships.indexOf(last_missile_coord) >= 0)
+    }
     this.missiles.push(player_coord)
     await this.game.play(player_coord, opponent_ack)
 
