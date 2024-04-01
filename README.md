@@ -2,8 +2,6 @@
 
 In this classic board game each player has a checkerboard as shown in the picture.
 
-[(YouTube)](https://www.youtube.com/watch?v=1IEgoAZiQzI)
-
 ![Battleships](/battleships.png)
 
 Players place several battleships of various sizes in secret locations on the board, as shown in gray.
